@@ -1,0 +1,194 @@
+---
+title: "TCGA Paralog Mutation Clonality"
+author: "Mason Lynch"
+date: "2025-10-21"
+output: html_document
+---
+
+Setup
+```{r}
+#Install Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(forcats)
+library(maftools)
+library(GenomicRanges)
+library(S4Vectors)
+library(tidyr)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+Load in Data
+```{r}
+#Mutation Data
+maf_data <- read.maf(maf = "mc3.v0.2.8.PUBLIC.maf.gz")
+mutation_data <- maf_data@data
+
+#Load in metadata
+metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+
+#Purity Data
+purity <- read_tsv("TCGA_mastercalls.abs_tables_JSedit.fixed.txt")
+
+#LOY Calls
+LOY_segment_data <- read.csv("sample_LOY_calls_.7cutoff.csv")
+
+#XY paralog gane names (from Bellot et al. 2014)
+#https://www.nature.com/articles/nature13206
+y_paralogs <- c("PRKY", "NLGN4Y", "TBL1Y", "AMELY", "TMSB4Y", "TXLNGY", "EIF1AY", "ZFY", "USP9Y", "DDX3Y", "UTY", "TSP4Y", "KMD5D", "RPS4Y", "RBMY", "SRY", "HSFY")
+x_paralogs <- c("PRKX", "NLGN4X", "TBL1X", "AMELX", "TMSB4X", "TXLNG", "EIF1AX", "ZFX", "USP9X", "DDX3X", "KDM6A", "TSPYL2", "KMD5C", "RPS4X", "RBMX", "SOX3", "HSFX")
+```
+
+
+Compile Mutations for LOY and WTY
+```{r}
+#Subset to mutations of genes of interest
+mutation_data <- mutation_data[mutation_data$Hugo_Symbol %in% y_paralogs | mutation_data$Hugo_Symbol %in% x_paralogs, ]
+
+#Match sample IDs between data sheets
+mutation_data$Tumor_Sample_Barcode <- substr(mutation_data$Tumor_Sample_Barcode, 1, 16)
+
+#Define functional YCN for each mutation
+mutation_data <- left_join(mutation_data, LOY_segment_data, by = c("Tumor_Sample_Barcode" = "Sample_ID"))
+```
+
+
+Loop Chi-Squared Tests for All X-Paralogs
+```{r}
+mutation_chi_sq <- data.frame("Symbol" = character(),
+                              "chi_sq" = numeric(),
+                              "mutant_LOY" = numeric(),
+                              "mutant_WTY" = numeric())
+
+total_LOY <- nrow(LOY_segment_data[LOY_segment_data$functional_YCN == "LOY" & complete.cases(LOY_segment_data$functional_YCN), ])
+total_WTY <- nrow(LOY_segment_data[LOY_segment_data$functional_YCN == "WTY" & complete.cases(LOY_segment_data$functional_YCN), ])
+
+for (i in seq_along(x_paralogs)){
+  gene <- x_paralogs[i]
+  
+  mutant_LOY <- sum(mutation_data[mutation_data$Hugo_Symbol == gene, ]$Tumor_Sample_Barcode %in% LOY_segment_data[LOY_segment_data$functional_YCN == "LOY", ]$Sample_ID)
+  mutant_WTY <- sum(mutation_data[mutation_data$Hugo_Symbol == gene, ]$Tumor_Sample_Barcode %in% LOY_segment_data[LOY_segment_data$functional_YCN == "WTY", ]$Sample_ID)
+  
+  chi_sq_matrix <- matrix(c(mutant_LOY, total_LOY - mutant_LOY,
+                          mutant_WTY, total_WTY - mutant_WTY),
+                        nrow = 2, byrow = TRUE)
+  rownames(chi_sq_matrix) <- c("LOY", "WTY")
+  colnames(chi_sq_matrix) <- c("Mutant", "WT")
+  
+  chisq_result <- suppressWarnings(chisq.test(chi_sq_matrix, correct = TRUE))
+  direction <- ifelse((mutant_WTY / total_WTY) > (mutant_LOY / total_LOY), "WTY>LOY", "LOY>WTY")
+
+  mutation_chi_sq <- rbind(mutation_chi_sq,
+    data.frame(Symbol = gene,
+               chi_sq = chisq_result$statistic,
+               mutant_LOY = mutant_LOY,
+               mutant_WTY = mutant_WTY,
+               Direction = direction))
+}
+```
+
+
+Loop T-test between VAF of LOY mutations and WTY mutations
+```{r}
+#Calculate VAF
+mutation_data$vaf <- mutation_data$t_alt_count / (mutation_data$t_alt_count + mutation_data$t_ref_count)
+
+#Run T-tests
+mutation_clonality <- data.frame("Symbol" = character(),
+                                 "p_value" = numeric(),
+                                 "average_vaf_LOY" = numeric(),
+                                 "average_vaf_WTY" = numeric())
+
+for (i in seq_along(x_paralogs)){
+  gene <- x_paralogs[i]
+  
+  mutant_LOY <- mutation_data[mutation_data$Hugo_Symbol == gene & mutation_data$functional_YCN == "LOY", ]
+  mutant_WTY <- mutation_data[mutation_data$Hugo_Symbol == gene & mutation_data$functional_YCN == "WTY", ]
+  
+  if (nrow(mutant_LOY) > 2 & nrow(mutant_WTY) > 2) {
+  t_test_result <- t.test(mutant_LOY$vaf, mutant_WTY$vaf, alternative = "less")
+  p_value <- t_test_result$p.value
+  } else {
+    p_value <- NA
+  }
+
+  mutation_clonality <- rbind(mutation_clonality,
+    data.frame(Symbol = gene,
+               p_value = p_value,
+               average_vaf_LOY = mean(mutant_LOY$vaf),
+               average_vaf_WTY = mean(mutant_WTY$vaf)))
+}
+```
+
+
+
+Loop T-test between VAF of LOY mutations and WTY mutations
+```{r}
+#Run T-tests
+mutation_impact <- data.frame("Symbol" = character(),
+                              "p_value" = numeric(),
+                              "high_LOY" = numeric(),
+                              "high_WTY" = numeric(),
+                              "moderate_LOY" = numeric(),
+                              "moderate_WTY" = numeric())
+
+for (i in seq_along(x_paralogs)){
+  gene <- x_paralogs[i]
+  
+   mutant_LOY <- mutation_data[mutation_data$Hugo_Symbol == gene & mutation_data$functional_YCN == "LOY", ]
+   mutant_WTY <- mutation_data[mutation_data$Hugo_Symbol == gene & mutation_data$functional_YCN == "WTY", ]
+   
+   high_LOY <- nrow(mutant_LOY[mutant_LOY$IMPACT == "HIGH", ])
+   high_WTY <- nrow(mutant_WTY[mutant_WTY$IMPACT == "HIGH", ])
+   moderate_LOY <- nrow(mutant_LOY[mutant_LOY$IMPACT == "MODERATE", ])
+   moderate_WTY <- nrow(mutant_WTY[mutant_WTY$IMPACT == "MODERATE", ])
+  
+  if (high_LOY > 0 | high_WTY > 0 | moderate_LOY > 0 | moderate_WTY > 0){
+  chi_sq_matrix <- matrix(c(high_LOY, moderate_LOY,
+                          high_WTY, moderate_WTY),
+                        nrow = 2, byrow = TRUE)
+  rownames(chi_sq_matrix) <- c("LOY", "WTY")
+  colnames(chi_sq_matrix) <- c("HIGH", "MODERATE")
+  
+  chisq_result <- suppressWarnings(chisq.test(chi_sq_matrix, correct = TRUE))
+  direction <- ifelse((high_WTY / (moderate_WTY + high_WTY + 1e-6)) > (high_LOY / (high_LOY + moderate_LOY + 1e-6)), "WTY>LOY", "LOY>WTY")
+
+  mutation_impact <- rbind(mutation_impact,
+    data.frame(Symbol = gene,
+               chi_sq = chisq_result$statistic,
+               high_LOY = high_LOY,
+               high_WTY = high_WTY,
+               moderate_LOY = moderate_LOY,
+               moderate_WTY = moderate_WTY,
+               Direction = direction))
+  } else{
+    mutation_impact <- rbind(mutation_impact,
+    data.frame(Symbol = gene,
+               chi_sq = NA,
+               high_LOY = high_LOY,
+               high_WTY = high_WTY,
+               moderate_LOY = moderate_LOY,
+               moderate_WTY = moderate_WTY,
+               Direction = NA))
+  }
+}
+```
+
+
+Display Results
+```{r}
+#Convert data frames to long format
+
+
+```
+
+
+
+
+
+
+

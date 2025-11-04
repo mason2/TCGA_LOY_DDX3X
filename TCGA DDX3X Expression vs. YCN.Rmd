@@ -1,0 +1,117 @@
+---
+title: "TCGA DDX3X Expression vs. YCN"
+author: "Mason Lynch"
+date: "2025-07-29"
+output: html_document
+---
+
+```{r}
+#Install Packages
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(stringr)
+library(ggpubr)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+
+Load in Data
+```{r}
+#TCGA expression
+TCGA_expression <- readRDS("TCGA_TPM_summary_cmb.rds")
+TCGA_expression_df <- as.data.frame(TCGA_expression)
+
+#LOY Status
+TCGA_LOY <- read.csv("sample_LOY_calls_.7cutoff.csv")
+
+#TCGA metadata
+TCGA_metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+```
+
+
+Format Data for Graphing
+```{r}
+#Subset to only DDX3X
+TCGA_expression_DDX3X <- TCGA_expression_df["DDX3X", ]
+
+#Subset names to only include sample ID
+colnames(TCGA_expression_DDX3X) <- str_sub(colnames(TCGA_expression_DDX3X), 1,16)
+TCGA_LOY$Sample_ID <- str_sub(TCGA_LOY$Sample_ID, 1,16)
+
+#Subset to only samples found in segment data (which should include only male samples)
+TCGA_expression_DDX3X_male <- TCGA_expression_DDX3X[, colnames(TCGA_expression_DDX3X) %in% TCGA_LOY$Sample_ID]
+
+#Add YCN Status to TCGA data
+TCGA_expression_DDX3X_male <- as.data.frame(t(TCGA_expression_DDX3X_male))
+
+#Match sample order of expression and CN data and add YCN status
+TCGA_expression_DDX3X_male$Sample_ID <- rownames(TCGA_expression_DDX3X_male)
+TCGA_expression_DDX3X_male <- left_join(TCGA_expression_DDX3X_male, TCGA_LOY, by = "Sample_ID")
+
+#remove NA samples
+TCGA_expression_DDX3X_male <- na.omit(TCGA_expression_DDX3X_male)
+```
+
+
+
+Plot Data
+```{r}
+#subset to only WTY and LOY samples
+TCGA_expression_DDX3X_male <- TCGA_expression_DDX3X_male[TCGA_expression_DDX3X_male$functional_YCN == "LOY" | TCGA_expression_DDX3X_male$functional_YCN == "WTY", ]
+
+#TCGA_expression_DDX3X_male%>%
+#ggplot(aes(x = YCN, y = DDX3X))+
+#  geom_jitter(aes(color = YCN), alpha = .05, width = .3) +
+#  geom_violin(fill = NA, outliers = F, width = 1, aes(color = YCN)) +
+#  stat_summary(fun = median, geom = "crossbar",
+#               width = 0.3, aes(color = YCN), fatten = 1) +
+#  theme_classic() +
+#  labs(x = "Y-Chromosome Copy Number Level", y = "DDX3X Expression (TPM)")
+
+TCGA_expression_DDX3X_male %>%
+  ggplot(aes(x = functional_YCN, y = DDX3X))+
+  geom_violin(aes(color=YCN),
+              trim = F,
+              width = .8,
+              alpha = 0.6,
+              position = position_dodge(width = 2),size=0.55,linewidth = 1) +
+  geom_boxplot(aes(color = YCN,
+                   fill = YCN), width = 0.1,alpha =0.5, outliers = F) + 
+  theme_classic() +
+  scale_color_manual(values = c("steelblue4", "steelblue1")) +
+  scale_fill_manual(values = c("steelblue4", "steelblue1")) +
+  labs(x = "Y-Chromosome Copy Number Level", y = "DDX3X Expression (TPM)", title = "YCN vs. DDX3X Expression") +
+  theme(legend.position = "none") -> p2
+
+ggarrange(p2, ncol = 2)
+
+#Run T-Test
+t.test(DDX3X ~ functional_YCN, data = TCGA_expression_DDX3X_male)
+```
+
+DDX3X vs. YCN By Tissue Type
+```{r}
+#Add Tissue Type Column to Samples
+TCGA_expression_DDX3X_male <- left_join(TCGA_expression_DDX3X_male, TCGA_metadata[TCGA_metadata$bcr_patient_barcode %in% TCGA_expression_DDX3X_male$patientId, ], by = c( "patientId" = "bcr_patient_barcode"))
+
+#Plot
+TCGA_expression_DDX3X_male %>%
+  ggplot(aes(x = acronym,
+             y = DDX3X,
+             color = functional_YCN,
+             fill = functional_YCN)) +
+  geom_boxplot(width = 0.5,
+               alpha = 0.5,
+               outlier.shape = NA,
+               position = position_dodge(width = 0.9)) + 
+  theme_classic() +
+  scale_color_manual(values = c("steelblue4", "steelblue1")) +
+  scale_fill_manual(values = c("steelblue4", "steelblue1")) +
+  labs(x = "Tissue Type",
+       y = "DDX3X Expression (TPM)",
+       title = "LOY vs WTY DDX3X Expression by Tissue Type") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```

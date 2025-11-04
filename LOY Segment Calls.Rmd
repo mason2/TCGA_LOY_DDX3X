@@ -1,0 +1,241 @@
+---
+title: "LOY Segment Calls"
+author: "Mason Lynch"
+date: "2025-07-28"
+output: html_document
+---
+
+```{r}
+#Load Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(ggthemes)
+library(ggpubr)
+library(forcats)
+library(scales)
+library(VennDiagram)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+Load in Data
+```{r}
+#Segment Data
+segment_data <- readRDS("segment_TCGA.rds")
+
+#Metadata
+metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+
+#Expression LOY calls as a reference
+expression_calls <- read_xlsx("2024-05-09564D-s3/2024-05-09564D-Supplementary Table 1.xlsx")
+colnames(expression_calls) <- expression_calls[1, ]
+expression_calls <- expression_calls[-1, ]
+```
+
+Subset Data
+```{r}
+#Only retain chromosome Y segment data
+segment_data <- segment_data[segment_data$Chromosome == "chrY", ]
+
+#Only keep male metadata samples
+metadata_male <- metadata[metadata$gender == "MALE", ]
+
+#Only retain segment data from male samples
+segment_data$patientId <- substr(segment_data$Sample_ID, 1, 12)
+segment_data_male <- segment_data[segment_data$patientId %in% metadata_male$bcr_patient_barcode, ]
+```
+
+Identify LOY Samples
+```{r}
+#Determine length of each fragment
+segment_data_male$length <- segment_data_male$End - segment_data_male$Start
+
+#Determine segment cnv
+segment_data_male$seg_cnv <- (segment_data_male$length/57227415) * segment_data_male$Segment_Mean
+
+#Summarize segment cnv-s for each region into a normalized cnv for each sample
+sample_LOY_calls <- segment_data_male %>%
+  group_by(Sample_ID) %>%
+  summarize(
+    sample_norm_cnv = sum(seg_cnv)
+  )
+
+#Return log2-transformed segment data to raw copy number (multiplying by two corrects the copy number to where it should be, because the segment calls divide segment mean by two since there is only 1 y-chromosome)
+sample_LOY_calls$sample_relative_CN <- 1*(2^sample_LOY_calls$sample_norm_cnv)
+sample_LOY_calls$sample_relative_CN <- sample_LOY_calls$sample_relative_CN*2
+```
+
+
+Average Repeated Samples
+```{r}
+#Substring Sample_ID to only the sample code
+sample_LOY_calls$Sample_ID <- substr(sample_LOY_calls$Sample_ID, 1, 16)
+
+#Average repeated sample IDs
+sample_LOY_calls <- sample_LOY_calls %>%
+  group_by(Sample_ID) %>%
+  summarise(sample_relative_CN = mean(sample_relative_CN, na.rm = TRUE))
+```
+
+
+```{r}
+#Determine GOY/PLOY/LOY/WTY based on segment data
+sample_LOY_calls$YCN <- ifelse(sample_LOY_calls$sample_relative_CN > .7, ifelse(sample_LOY_calls$sample_relative_CN > .95, ifelse(sample_LOY_calls$sample_relative_CN > 1.3, "GOY", "WTY"), "PLOY"), "LOY")
+
+#Density plot of YCN
+ggplot(sample_LOY_calls, aes(x = sample_relative_CN)) +
+  geom_density(alpha = 0.5, fill = "lightgoldenrod1") +
+  labs(title = "Density of Y-Chromosome Copy Number TCGA", y = "Number Male Samples", x = "Y Chromosome Relative Copy Number") +
+  geom_vline(xintercept = 0, linetype = "dashed", size = .7, color = "steelblue4") +
+  geom_vline(xintercept = 0.7, linetype = "dashed", size = .7, color = "steelblue3") +
+  geom_vline(xintercept = .95, linetype = "dashed", size = .7, color = "steelblue2") +
+  geom_vline(xintercept = 1.3, linetype = "dashed", size = .7, color = "steelblue1") +
+  xlim(0, 3) +
+  theme_classic()
+
+#Density plot of YchrS (expression score)
+expression_calls$YchrS <- as.numeric(expression_calls$YchrS)
+ggplot(expression_calls, aes(x = YchrS)) +
+  geom_density(alpha = 0.5, fill = "lightgoldenrod1") +
+  labs(title = "Density of YchrS Expression Score TCGA", y = "Number Patients", x = "YchrS") +
+  geom_vline(xintercept = 0.3223514, linetype = "dashed", size = .7, color = "firebrick4") +
+  xlim(0, 3) +
+  theme_classic()
+```
+
+
+Compare to Nature LOY Expression Calls
+```{r}
+#bind together YchrS calls and normalized cnv for samples
+sample_LOY_calls$patientId <- substr(sample_LOY_calls$Sample_ID, 1, 12)
+expression_CN <- left_join(sample_LOY_calls, expression_calls, by = c("patientId" = "Sample"))
+
+#Remove segment samples without corresponding expression patient data
+expression_CN <- expression_CN[!is.na(expression_CN$YchrS_level), ]
+
+#Plot normalized cnv against nature calls
+expression_CN %>% 
+  mutate(YchrS = as.numeric(YchrS)) %>% 
+  dplyr::filter(sample_relative_CN > 0.01 & sample_relative_CN < 10 ) %>% 
+  ggplot(aes(x = YchrS, y = sample_relative_CN)) +
+  geom_point(shape = 21, color = "black", stroke_size = .005, fill = "lightgoldenrod1", alpha = .4) +
+  theme_classic() +
+  scale_y_log10(limits = c(.1, 3)) +
+  geom_smooth(method = "lm", se = TRUE, color = "steelblue4", size = .8) +
+  labs(x = "Knott Lab YchrS Expression Score", y = "log10 Segmentation Relative Copy Number", title = "Correlation of Y-chromosome Expression Score and Copy Number")
+
+#Visualize our cutoff using nature LOY paper's cutoffs
+ggplot(expression_CN[complete.cases(expression_CN$YCN), ] %>%
+       mutate(YchrS = as.numeric(YchrS)),
+       aes(x = fct_reorder(YCN, sample_relative_CN, .fun = median),
+        y = sample_relative_CN)) +
+  geom_jitter(width = 0.3,
+              aes(color = YchrS_level),
+              alpha = 0.1) +
+  theme_classic() +
+  labs(x = "Sheltzer Lab Segmentation Calls",
+       y = "log10 Segmentation Relative Copy Number",
+       color = "Knott Lab Expression Call",
+       title = "Comparing Y-Chromosome Segmentation and Expression Cutoffs") +
+  scale_color_manual(values = c("firebrick4", "dodgerblue2")) +
+  scale_fill_manual(values = c("firebrick4", "dodgerblue2")) +
+  scale_y_log10() +
+  ylim(c(.1, 2))
+
+#Make vectors for venn diagram
+segment_LOY <- unique(expression_CN$patientId[expression_CN$YCN == "LOY"])
+expression_LOY <- unique(expression_CN$patientId[expression_CN$YchrS_level == "LOY_BR"])
+segment_WTY <- unique(expression_CN$patientId[expression_CN$YCN == "WTY"])
+expression_WTY <- unique(expression_CN$patientId[expression_CN$YchrS_level == "WTY_BR"])
+
+#Visualize LOY cutoffs with a venn diagram
+ggplot() +
+  theme_classic()
+cutoff_LOY_overlap <- draw.pairwise.venn(
+  area1 = length(segment_LOY),
+  area2 = length(expression_LOY),
+  cross.area = length(intersect(segment_LOY, expression_LOY)),
+  category = c("LOY_CN", "LOY_expression"),
+  fill = c("steelblue4", "firebrick4"),
+  alpha = .75,
+  cex = 2,
+  cat.cex = 1.75,
+  cat.fontface = "bold",
+  fontface = "bold",
+  cat.pos = c(230, 140)
+)
+
+#Visualize WTY cutoffs with a venn diagram
+ggplot() +
+  theme_classic()
+cutoff_WTY_overlap <- draw.pairwise.venn(
+  area1 = length(segment_WTY),
+  area2 = length(expression_WTY),
+  cross.area = length(intersect(segment_WTY, expression_WTY)),
+  category = c("WTY_CN", "WTY_expression"),
+  fill = c("steelblue4", "firebrick4"),
+  alpha = .75,
+  cex = 2,
+  cat.cex = 1.75,
+  cat.fontface = "bold",
+  fontface = "bold",
+  cat.pos = c(230, 140)
+)
+
+#Put this in the command line to generate either venn diagram
+#grid.draw(cutoff_venn_overlap)
+```
+
+
+Subset LOY / WTY calls to match expression calls
+```{r}
+#Determine overlapping sample names
+LOY_overlap <- sample_LOY_calls$Sample_ID[(sample_LOY_calls$YCN == "LOY")]
+LOY_overlap <- LOY_overlap[substr(LOY_overlap, 1, 12) %in% expression_LOY]
+WTY_overlap <- sample_LOY_calls$Sample_ID[(sample_LOY_calls$YCN == "WTY")]
+WTY_overlap <- WTY_overlap[substr(WTY_overlap, 1, 12) %in% expression_WTY]
+
+
+#Add filtered YCN data to LOY calls sheet
+sample_LOY_calls$functional_YCN <- ifelse(sample_LOY_calls$Sample_ID %in% LOY_overlap, "LOY",
+                                        ifelse(sample_LOY_calls$Sample_ID %in% WTY_overlap, "WTY", NA))
+```
+
+
+Save Samples
+```{r}
+#write.csv(sample_LOY_calls, "sample_LOY_calls_.7cutoff.csv")
+```
+
+Plot LOY Ratio by Tissue Type
+```{r}
+#Get cancer types for each sample
+YCN_tissue_type <- left_join(sample_LOY_calls, metadata_male[, 1:4], by = c("patientId" = "bcr_patient_barcode"))
+YCN_tissue_type$LOY_score <- ifelse(YCN_tissue_type$functional_YCN == "LOY", 1, ifelse(YCN_tissue_type$functional_YCN == "WTY", 0, NA))
+
+#Plot Results (by copy number)
+ggplot(YCN_tissue_type, aes(x = fct_reorder(acronym, sample_relative_CN, .fun = median), y = sample_relative_CN)) +
+  geom_boxplot(fill = "lightgoldenrod1", size = .2) +
+  scale_y_continuous(limits = c(0, 2)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Cancer Type", y = "Relative Copy Number", title = "Y-Chromosome Copy Number Across Tissue Types")
+
+#Plot Results (by LOY/WTY)
+na.omit(YCN_tissue_type) %>%
+  group_by(acronym) %>%
+  summarise(mean_LOY_score = mean(LOY_score), .groups = "drop") %>%
+ggplot(aes(x = fct_reorder(acronym, mean_LOY_score, .fun = median, .desc = TRUE), y = mean_LOY_score)) +
+  geom_col(aes(y = 1), fill = "skyblue", size = .2) +
+  geom_col(fill = "steelblue4", size = .2) +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Tissue Type", y = "Proportion LOY Tumors", title = "LOY Status Across Tissue Types")
+```
+
+
+

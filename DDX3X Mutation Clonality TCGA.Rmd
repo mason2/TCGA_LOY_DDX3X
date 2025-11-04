@@ -1,0 +1,191 @@
+---
+title: "TCGA DDX3 Mutation Clonality"
+author: "Mason Lynch"
+date: "2025-08-22"
+output: html_document
+---
+
+Setup
+```{r}
+#Install Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(forcats)
+library(maftools)
+library(GenomicRanges)
+library(S4Vectors)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+Load in Data
+```{r}
+#Mutation Data
+maf_data <- read.maf(maf = "mc3.v0.2.8.PUBLIC.maf.gz")
+mutation_data <- maf_data@data
+
+#Load in metadata
+metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+
+#Purity Data
+purity <- read_tsv("TCGA_mastercalls.abs_tables_JSedit.fixed.txt")
+
+#Copy Number Data
+segment_data <- readRDS("segment_TCGA.rds")
+
+#LOY Calls
+LOY_segment_data <- read.csv("sample_LOY_calls_.7cutoff.csv")
+```
+
+
+
+Call Copy Number from Segment Mean
+```{r}
+#Determine length of each fragment
+segment_data$length <- segment_data$End - segment_data$Start
+
+#Determine segment cnv (using length of X and Y chromosomes, respectively)
+segment_data$seg_cnv <- ifelse(segment_data$Chromosome == "chrX",
+                               (segment_data$length/156040895) * segment_data$Segment_Mean,
+                               (segment_data$length/57227415) * segment_data$Segment_Mean)
+  
+
+#Summarize segment cnv-s for each region into a normalized cnv for each sample
+segment_data <- segment_data %>%
+  group_by(Sample_ID) %>%
+  summarize(
+    sample_norm_cnv = sum(seg_cnv),
+    Chromosome = Chromosome,
+    Start = Start,
+    End = End
+  )
+
+#Return log2-transformed segment data to raw copy number (multiplying by two corrects the copy number to where it should be, because the segment calls divide segment mean by two for y-chromosome samples since there is only 1 y-chromosome)
+segment_data$sample_relative_CN <- 1*(2^segment_data$sample_norm_cnv)
+segment_data$sample_relative_CN <- ifelse(segment_data$Chromosome == "chrY",
+                                          segment_data$sample_relative_CN*2,
+                                          segment_data$sample_relative_CN
+)
+```
+
+
+
+Join Mutation and CNV Data
+```{r}
+#Calculate VAF
+mutation_data$vaf <- mutation_data$t_alt_count / (mutation_data$t_alt_count + mutation_data$t_ref_count)
+
+#Subset to mutations of interest (to save space)
+mutation_data <- rbind(mutation_data[mutation_data$Hugo_Symbol == "DDX3X", ], mutation_data[mutation_data$Hugo_Symbol == "DDX3Y", ])
+
+#match chromosome names between data frames
+segment_data$Chromosome <- sub("^chr", "", segment_data$Chromosome)
+
+#Subset to only first 16 characters of Sample ID for mutation/CNV and purity
+purity$sample <- substr(purity$sample, 1, 16)
+segment_data$Sample_ID <- substr(segment_data$Sample_ID, 1, 16)
+mutation_data$Tumor_Sample_Barcode <- substr(mutation_data$Tumor_Sample_Barcode, 1, 16)
+LOY_segment_data$Sample_ID <- substr(LOY_segment_data$Sample_ID, 1, 16)
+
+#Convert Mutation Data and Segment Data into Genomic Ranges
+segment_gr <- GRanges(
+  seqnames = segment_data$Chromosome,
+  ranges   = IRanges(start = segment_data$Start, end = segment_data$End),
+  Sample   = segment_data$Sample_ID,
+  sample_relative_CN = segment_data$sample_relative_CN
+)
+mutation_gr <- GRanges(
+  seqnames = mutation_data$Chromosome,
+  ranges   = IRanges(start = mutation_data$Start_Position, end = mutation_data$Start_Position),
+  Sample   = mutation_data$Tumor_Sample_Barcode,
+  vaf = mutation_data$vaf,
+)
+
+# Add "Sample" as a grouping column so overlaps are restricted within-sample
+hits <- findOverlaps(mutation_gr, segment_gr,
+                     ignore.strand = TRUE)
+
+# Keep only matches where Sample IDs are the same
+sample_cnv_mut_match <- mcols(mutation_gr)$Sample[queryHits(hits)] ==
+               mcols(segment_gr)$Sample[subjectHits(hits)]
+hits <- hits[sample_cnv_mut_match]
+
+# initialize metadata col
+mcols(mutation_gr)$sample_relative_CN <- NA_real_
+
+# Map segment mean onto mutations
+mcols(mutation_gr)$sample_relative_CN[queryHits(hits)] <-
+  mcols(segment_gr)$sample_relative_CN[subjectHits(hits)]
+
+#Convert back to df
+mutation_cnv <- as.data.frame(mutation_gr)
+```
+
+
+Join Purity, Estimate CCF, Join LOY Status
+```{r}
+#Join purity to mutation and CNV data
+mutation_cnv_purity <- left_join(mutation_cnv, purity, by = c("Sample" = "sample"))
+
+#We assume multiplicity of mutation as 1 for simplicity, but this may not accurately capture whole genome duplicated samples
+mutation_cnv_purity$multiplicity <- 1
+
+#Estimate CCF
+mutation_cnv_purity$ccf_est <- with(mutation_cnv_purity,
+  (vaf * (sample_relative_CN * purity + 2 * (1 - purity))) / (purity * multiplicity)
+)
+
+#Join YCN
+mutation_cnv_purity_LOY <- left_join(mutation_cnv_purity, LOY_segment_data, by = c("Sample" = "Sample_ID"))
+
+#Cap CCF at 1
+mutation_cnv_purity_LOY$ccf_est_capped <- pmin(mutation_cnv_purity_LOY$ccf_est, 1)
+```
+
+
+Plot LOY vs. DDX3X Mutation Clonality
+```{r}
+na.omit(mutation_cnv_purity_LOY[mutation_cnv_purity_LOY$seqnames == "X", ]) %>%
+ggplot(aes(x = functional_YCN, y = ccf_est, color = functional_YCN)) +
+    geom_boxplot(position = position_dodge(width = 0.8), width = 0.7) +
+    geom_jitter(width = .05) +
+    theme_classic(base_size = 14) +
+  scale_color_manual(values = c("steelblue4", "steelblue1")) +
+  scale_fill_manual(values = c("steelblue4", "steelblue1")) +
+    labs(x = "Functional YCN", y = "DDX3X Mutation Clonality", title = "DDX3X Mutation Clonality Across LOY and WTY Tumors", color = "Functional YCN") +
+  theme(legend.position = "none")
+```
+
+
+
+DDX3X Mutations vs. DDX3Y Mutations
+```{r}
+#Determine Double Mutant Samples
+DDX3X_mutants <- mutation_cnv_purity[mutation_cnv_purity$seqnames == "X", ]
+DDX3Y_mutants <- mutation_cnv_purity[mutation_cnv_purity$seqnames == "Y", ]
+
+#Only Retain Mutual Mutant Samples
+DDX3X_mutants <- DDX3X_mutants[DDX3X_mutants$Sample %in% DDX3Y_mutants$Sample, ]
+DDX3Y_mutants <- DDX3Y_mutants[DDX3Y_mutants$Sample %in% DDX3X_mutants$Sample, ]
+
+#Ensure both data frames are in the same order
+DDX3X_mutants <- DDX3X_mutants[match(DDX3X_mutants$Sample, DDX3Y_mutants$Sample), ]
+
+#Join DDX3X and DDX3Y Mutations
+double_mutants <- data.frame("Sample" = DDX3X_mutants$Sample, "DDX3X_mutation_clonality" = DDX3X_mutants$ccf_est, "DDX3Y_mutation_clonality" = DDX3Y_mutants$ccf_est, "Genome_doublings" = DDX3X_mutants$`Genome doublings`)
+```
+
+
+Plot DDX3X vs. DDX3Y Mutations
+```{r}
+ggplot(double_mutants, aes(x = DDX3Y_mutation_clonality, y = DDX3X_mutation_clonality)) +
+    geom_point(shape = 21, color = "black", stroke_size = .005, fill = "lightgoldenrod1", alpha = 1, size = 3) +
+    theme_classic(base_size = 14) +
+    labs(x = "DDX3Y mutation clonality", y = "DDX3X mutation clonality", title = "DDX3X DDX3Y Mutual Mutation Clonality")
+```
+
+
+

@@ -1,0 +1,118 @@
+---
+title: "TCGA Clinical Characteristic Analysis"
+author: "Mason Lynch"
+date: "2025-09-09"
+output: html_document
+---
+
+```{r}
+#Load Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(ggthemes)
+library(ggpubr)
+library(forcats)
+library(scales)
+library(survival)
+library(survminer)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+
+Load in Data
+```{r}
+#TCGA expression
+TCGA_expression <- readRDS("TCGA_TPM_summary_cmb.rds")
+TCGA_expression_df <- as.data.frame(TCGA_expression)
+
+#LOY Status
+TCGA_LOY <- read.csv("sample_LOY_calls_.7cutoff.csv")
+
+#TCGA metadata
+TCGA_metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+
+#Knott lab expression calls (control)
+expression_calls <- read_xlsx("2024-05-09564D-s3/2024-05-09564D-Supplementary Table 1.xlsx")
+colnames(expression_calls) <- expression_calls[1, ]
+expression_calls <- expression_calls[-1, ]
+```
+
+
+LOY Kaplan-Meier Curve
+```{r}
+#Limit to patients with LOY call
+TCGA_metadata_YCN <- TCGA_metadata[TCGA_metadata$bcr_patient_barcode %in% TCGA_LOY$patientId, ]
+
+#Define Functional LOY/WTY for each sample
+TCGA_metadata_YCN <- left_join(TCGA_metadata_YCN, TCGA_LOY[, c(6, 7)], by = c("bcr_patient_barcode" = "patientId"))
+
+#Limit to patients with functional_YCN call
+TCGA_metadata_YCN <- TCGA_metadata_YCN[!is.na(TCGA_metadata_YCN$functional_YCN), ]
+
+#Define overall survival as a binary (0/1) instead of a character
+TCGA_metadata_YCN$OS_event <- ifelse(TCGA_metadata_YCN$vital_status == "Dead", 1, 0)
+
+#Define survival time (change censored entries to be alive at last survival time)
+TCGA_metadata_YCN$OS_time <- ifelse(
+  !is.na(as.numeric(TCGA_metadata_YCN$days_to_death)),
+  TCGA_metadata_YCN$days_to_death,
+  TCGA_metadata_YCN$days_to_last_followup
+)
+
+#Build Survival Object
+kaplan_meier_survival <- Surv(time = as.numeric(TCGA_metadata_YCN$OS_time), event = TCGA_metadata_YCN$OS_event)
+
+#Fit survival curve
+kaplan_meier_fit <-  survfit(kaplan_meier_survival ~ functional_YCN, data = TCGA_metadata_YCN)
+
+#Plot survival curve
+ggsurvplot(
+  kaplan_meier_fit, 
+  data = TCGA_metadata_YCN,
+  pval = TRUE,
+  conf.int = FALSE,
+  palette = c("steelblue", "tomato"),
+  legend.title = "Functional YCN",
+  legend.labs = c("LOY", "WTY"),
+  xlab = "Time (days)",
+  ylab = "Survival probability",
+  title = "Functional YCN Overall Survival"
+)
+```
+
+YCN Survival by Tissue Type
+```{r}
+#Take p-value of differences in survival time 
+YCN_survival_tissue <- data.frame("tissue" = NA, "p_value" = NA)
+tissue_types <- unique(TCGA_metadata_LOY$acronym)
+for (i in 1:length(tissue_types)) {
+  tissue <- tissue_types[i]
+  TCGA_metadata_tissue <- TCGA_metadata_YCN[TCGA_metadata_YCN$acronym == tissue, ]
+  
+  survival_tissue <- Surv(time = as.numeric(TCGA_metadata_tissue$OS_time), event = TCGA_metadata_tissue$OS_event)
+  survival_tissue_diff <- survdiff(survival_tissue ~ functional_YCN, data = TCGA_metadata_tissue)
+  p_value <- 1 - pchisq(survival_tissue_diff$chisq, length(survival_tissue_diff$n) - 1)
+  
+  YCN_survival_tissue[i, ] <- c(tissue, p_value)
+}
+
+#Convert to adjusted p-value
+YCN_survival_tissue$adjusted_p_value <- p.adjust(YCN_survival_tissue$p_value, method = "BH")
+
+#Plot adjusted p-values
+ggplot(YCN_survival_tissue, aes(x = fct_reorder(tissue, as.numeric(p_value), .fun = mean), y = as.numeric(p_value))) +
+  geom_col(aes(), fill = "steelblue4") +
+  theme_classic() +
+  geom_hline(yintercept = .05, linetype = "dashed", size = .75, color = "firebrick4") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Tissue Type", y = "LOY vs. WTY Survival p-value", title = "Functional YCN Survival Differences by Tissue Type")
+
+```
+
+
+
+

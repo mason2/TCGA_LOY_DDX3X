@@ -1,0 +1,438 @@
+---
+title: "TCGA GSEA DDX3X + YCN"
+author: "Mason Lynch"
+date: "2025-07-29"
+output: html_document
+---
+
+Setup
+```{r}
+#Install Packages
+library(ggplot2)
+library(msigdbr)
+library(fgsea)
+library(dplyr)
+library(DESeq2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(tibble)
+library(readr)
+library(ggrepel)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+
+
+Load in Data
+```{r}
+#TCGA tpm
+tpm_data_df <- as.data.frame(readRDS("TCGA_TPM_summary_cmb.rds"))
+
+
+#TCGA LOY Segmentation calls (male only samples)
+LOY_calls <- read.csv("sample_LOY_calls_.7cutoff.csv")
+
+
+#TCGA raw read expression
+read_data_df <- as.data.frame(readRDS("TCGA_count_summary_cmb.RDS"))
+
+  
+#Sequencing Metadata
+metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+```
+
+
+
+Subset to Tissue Type of Interest (this can be modular)
+```{r}
+#Select Tissue Type of Interest
+tissue_type_samples <- metadata[metadata$acronym == "STAD", ]
+
+#Subset expression data to only include samples in tissue type(s) of interest
+read_data_df <- read_data_df[, substr(colnames(read_data_df), 1, 12) %in% tissue_type_samples$bcr_patient_barcode]
+
+```
+
+
+
+Determine WTY and LOY Groups
+```{r}
+#Separate LOY and WTY Samples
+LOY_samples <- LOY_calls[LOY_calls$YCN == "LOY", ]
+WTY_samples <- LOY_calls[LOY_calls$YCN == "WTY", ]
+
+#Find gene expression for all LOY and WTY samples
+LOY_samples <- read_data_df[, substr(colnames(read_data_df), 1, 16) %in% substr(LOY_samples$Sample_ID, 1, 16)]
+WTY_samples <- read_data_df[, substr(colnames(read_data_df), 1, 16) %in% substr(WTY_samples$Sample_ID, 1, 16)]
+```
+
+
+
+Determine High and Low DDX3X Groups
+```{r}
+#Determine DDX3X Expression
+DDX3X_expression <- tpm_data_df["DDX3X", ]
+
+#Subset to only male samples
+DDX3X_expression <- DDX3X_expression[, substr(colnames(DDX3X_expression), 1, 16) %in% substr(LOY_calls$Sample_ID, 1, 16)]
+
+#Determine DDX3X expression quantiles
+DDX3X_expression_quantiles <- quantile(as.numeric(DDX3X_expression[1, ]), probs = c(0.25, 0.5, 0.75))
+
+#Define high and low DDX3X groups
+DDX3X_low_samples <- DDX3X_expression[, DDX3X_expression[1, ] <= DDX3X_expression_quantiles[1]]
+DDX3X_high_samples <- DDX3X_expression[, DDX3X_expression[1, ] >= DDX3X_expression_quantiles[3]]
+
+#Determine genome-wide expression for low and high DDX3X samples
+DDX3X_low_samples <- read_data_df[, substr(colnames(read_data_df), 1, 16) %in% substr(colnames(DDX3X_low_samples), 1, 16)]
+DDX3X_high_samples <- read_data_df[, substr(colnames(read_data_df), 1, 16) %in% substr(colnames(DDX3X_high_samples), 1, 16)]
+```
+
+
+
+Prepare Sample Sheets for DESeq2
+```{r}
+#prepare countData s
+YCN_countData <- cbind(LOY_samples, WTY_samples)
+DDX3X_expression_countData <- cbind(DDX3X_high_samples, DDX3X_low_samples)
+
+
+#Prepare Sample sheets for individual sample groups
+LOY_colData <- data.frame("sample" = colnames(LOY_samples), "condition" = "LOY")
+WTY_colData <- data.frame("sample" = colnames(WTY_samples), "condition" = "WTY")
+DDX3X_high_colData <- data.frame("sample" = colnames(DDX3X_high_samples), "condition" = "high")
+DDX3X_low_colData <- data.frame("sample" = colnames(DDX3X_low_samples), "condition" = "low")
+
+
+#Determine batch effect for wach of these samples
+LOY_colData$batch <- substr(colnames(LOY_samples), 22, 25)
+WTY_colData$batch <- substr(colnames(WTY_samples), 22, 25)
+DDX3X_high_colData$batch <- substr(colnames(DDX3X_high_samples), 22, 25)
+DDX3X_low_colData$batch <- substr(colnames(DDX3X_low_samples), 22, 25)
+
+
+#Bind together appropriate groups
+YCN_colData <- rbind(LOY_colData, WTY_colData)
+DDX3X_expression_colData <- rbind(DDX3X_high_colData, DDX3X_low_colData)
+
+```
+
+
+
+Run DESeq2 (and save)
+```{r}
+#Free up memory by removing original, unfiltered data files
+rm(read_data)
+rm(tpm_data)
+rm(read_data_df)
+rm(tpm_data_df)
+rm(metadata)
+rm(DDX3X_high_samples)
+rm(DDX3X_low_samples)
+rm(LOY_samples)
+rm(WTY_samples)
+gc()
+
+#Prepare YCN data
+YCN_DESeq_data <- DESeqDataSetFromMatrix(
+  countData = YCN_countData,
+  colData = YCN_colData,
+  design = ~ batch + condition
+)
+
+#Run YCN DESeq2
+DDS_YCN <- DESeq(YCN_DESeq_data)
+
+#Save YCN dds
+saveRDS(DDS_YCN, file = "DDS_YCN_RDS.rds")
+
+#Prepare DDX3X High/Low data
+#DDX3X_expression_DESeq_data <- DESeqDataSetFromMatrix(
+#  countData = DDX3X_expression_countData,
+#  colData = DDX3X_expression_colData,
+#  design = ~ batch + condition
+#)
+
+#Run DDX3X High/Low DESeq2
+#DDS_DDX3X_expression <- DESeq(DDX3X_expression_DESeq_data)
+
+#Save DDX3X High/Low dds
+saveRDS(DDS_DDX3X_expression, file = "DDS_DDX3X_expression_RDS.rds")
+```
+
+
+
+
+============OKAY to Stop here and/or Clean Environment============
+
+
+
+
+
+Filter DDS Data, run GSEA, and Create Dot plot (DDX3X expression)
+```{r}
+#Read in saved DDS data
+DDS_DDX3X_expression <- readRDS("STAD_DDS_DDX3X_expression_RDS.rds")
+
+#Get DESeq2 results
+DDX3X_expression_dds_results <- results(DDS_DDX3X_expression, contrast = c("condition", "high", "low"))
+
+#Filter out NA values from log2fold change column
+DDX3X_expression_dds_results_filtered <- DDX3X_expression_dds_results[!is.na(DDX3X_expression_dds_results$log2FoldChange), ]
+
+#rank genes for GSEA
+DDX3X_expression_genes <- data.frame("symbol" = rownames(DDX3X_expression_dds_results_filtered), "log2foldchange" = DDX3X_expression_dds_results_filtered$log2FoldChange)
+DDX3X_expression_genes <- DDX3X_expression_genes[order(DDX3X_expression_genes$log2foldchange, decreasing = TRUE), ]
+DDX3X_expression_genes_ranked <- DDX3X_expression_genes$log2foldchange
+names(DDX3X_expression_genes_ranked) <- DDX3X_expression_genes$symbol
+
+#run GSEA
+DDX3X_expression_gsea <- gseGO(geneList = DDX3X_expression_genes_ranked,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "BP",
+              minGSSize    = 10,
+              maxGSSize    = 2000,
+              pvalueCutoff = 1,
+              verbose      = FALSE,
+              keyType = "SYMBOL")
+
+#Dotplot of top pathways
+#DDX3X_expression_gsea@result <- DDX3X_expression_gsea@result[order(DDX3X_expression_gsea@result$NES, decreasing = FALSE), ]
+#dotplot(DDX3X_expression_gsea, showCategory = 15) +
+#  ggtitle("TCGA-STAD High DDX3X Downregulation")
+
+#format to df
+DDX3X_expression_gsea_df <- as.data.frame(DDX3X_expression_gsea)
+
+#write excel
+write.table(DDX3X_expression_gsea_df, file = "STAD_DDX3X_expression_gsea_gsea.tsv", sep = "\t")
+```
+
+DDX3X Expression Volcano Plots
+```{r}
+#Create negative log10 pvalue and significance cutoff
+DDX3X_expression_dds_results_filtered$neg_log10_p <- -log10(DDX3X_expression_dds_results_filtered$pvalue)
+DDX3X_expression_dds_results_filtered$significance <- ifelse(DDX3X_expression_dds_results_filtered$pvalue <= .05, "Significant", "Not Significant")
+DDX3X_expression_dds_results_filtered$gene <- rownames(DDX3X_expression_dds_results_filtered)
+
+#Highlight 3 selected pathways
+highlighted_pathways <- DDX3X_expression_gsea_df[c(2, 7, 10), ]
+for (i in 1:nrow(DDX3X_expression_dds_results_filtered)) {
+  gene <- DDX3X_expression_dds_results_filtered$gene[i]
+  if (grepl(gene, highlighted_pathways$core_enrichment[1])) {
+    DDX3X_expression_dds_results_filtered$pathway[i] <- "aerobic electron transport chain"
+  } else if (grepl(gene, highlighted_pathways$core_enrichment[2])) {
+    DDX3X_expression_dds_results_filtered$pathway[i] <- "proton motive force-driven mitochondrial ATP synthesis"
+  } else if (grepl(gene, highlighted_pathways$core_enrichment[3])) {
+    DDX3X_expression_dds_results_filtered$pathway[i] <- "oxidative phosphorylation"
+  } else {
+    DDX3X_expression_dds_results_filtered$pathway[i] <- "other"
+  }
+}
+
+#Subset to significant and insignificant genes
+DDX3X_expression_significant_genes <- subset(DDX3X_expression_dds_results_filtered, 
+                            abs(log2FoldChange) > 1 & pvalue < 0.05)
+
+#Subset dds for labeling top genes and order correctly
+DDX3X_expression_dds_gene_labels_df <- as.data.frame(DDX3X_expression_significant_genes)
+DDX3X_expression_dds_gene_labels_df <- DDX3X_expression_dds_gene_labels_df[DDX3X_expression_dds_gene_labels_df$pathway != "other", ]
+
+#Create volcano plot based on log2fold sort.list()#Create volcano plot based on log2fold change expression
+ggplot(DDX3X_expression_dds_results_filtered, aes(x = log2FoldChange, y = neg_log10_p)) +
+  geom_point(data = subset(DDX3X_expression_dds_results_filtered, pathway == "other"), color = "gray", alpha = .5)  +
+  geom_point(data = subset(DDX3X_expression_significant_genes, pathway == "aerobic electron transport chain"), color = "red", alpha = 1, size = 3) +
+  geom_point(data = subset(DDX3X_expression_significant_genes, pathway == "proton motive force-driven mitochondrial ATP synthesis"), color = "green", alpha = 1, size = 3) +
+  geom_point(data = subset(DDX3X_expression_significant_genes, pathway == "oxidative phosphorylation"), color = "blue", alpha = 1, size = 3) +
+  theme_classic() +
+  labs(
+    title = "STAD DDX3X High Expression Upregulated Genes",
+    x = "Log2 Fold Change Expression",
+    y = "-Log10 p-value"
+  ) +
+#  geom_text_repel(data = DDX3X_expression_dds_gene_labels_df, aes(label = gene)) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  theme(legend.position = "none")
+
+#Find -log10fold pvalue for enriched pathways of GSEA
+DDX3X_expression_gsea_df$neg_log10_p <- -log10(DDX3X_expression_gsea_df$pvalue)
+
+#Identify pathways of interest
+DDX3X_expression_highlight_pathways <- DDX3X_expression_gsea_df[grepl("mitochondrial ATP synthesis", DDX3X_expression_gsea_df$Description), ]
+
+#Generate dotplot based on GSEA data
+ggplot(DDX3X_expression_gsea_df, aes(x = NES, y = neg_log10_p)) +
+  geom_point() +
+  geom_point(data = DDX3X_expression_highlight_pathways, color ="red", size = 3) +
+  theme_classic() +
+  labs(
+    title = "STAD DDX3X High Expression Enriched Pathways",
+    x = "NES",
+    y = "-Log10 p-value") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black")
+```
+
+
+Control Graphs: Make sure DDX3X is Highly Expressed in the "High DDX3X" Group
+```{r}
+#Control: Confirm that DDX3X pathways are upregulated
+ggplot(DDX3X_expression_gsea_df, aes(x = NES, y = neg_log10_p)) +
+  geom_point() +
+  geom_point(data = DDX3X_expression_gsea_df[grepl("DDX3X", DDX3X_expression_gsea_df$core_enrichment), ], color ="red", size = 3) +
+  theme_classic() +
+  labs(
+    title = "STAD DDX3X High Expression: Highlighted DDX3X Pathways",
+    x = "NES",
+    y = "-Log10 p-value") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black")
+
+#Control: Confirm that DDX3X itself is upregulated
+ggplot(DDX3X_expression_dds_results_filtered, aes(x = log2FoldChange, y = neg_log10_p)) +
+  geom_point(data = subset(DDX3X_expression_dds_results_filtered, gene != "DDX3X"), color = "gray", alpha = .5)  +
+  geom_point(data = subset(DDX3X_expression_significant_genes, gene == "DDX3X"), color = "red", alpha = 1, size = 3) +
+  theme_classic() +
+  labs(
+    title = "DDX3X High Expression Enriched Genes: DDX3X Highlighted",
+    x = "Log2 Fold Change Expression",
+    y = "-Log10 p-value"
+  ) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  theme(legend.position = "none")
+```
+
+
+Filtering and GSEA (YCN)
+```{r}
+#Read in saved DDS data
+DDS_YCN <- readRDS("KIRC_DDS_YCN_RDS.rds")
+
+#Get DESeq2 results
+YCN_dds_results <- results(DDS_YCN, contrast = c("condition", "LOY", "WTY"))
+
+#Filter out NA values from log2fold change column
+YCN_dds_results_filtered <- YCN_dds_results[!is.na(YCN_dds_results$log2FoldChange), ]
+
+#rank genes for GSEA
+YCN_genes <- data.frame("symbol" = rownames(YCN_dds_results_filtered), "log2foldchange" = YCN_dds_results_filtered$log2FoldChange)
+YCN_genes <- YCN_genes[order(YCN_genes$log2foldchange, decreasing = TRUE), ]
+YCN_genes_ranked <- YCN_genes$log2foldchange
+names(YCN_genes_ranked) <- YCN_genes$symbol
+
+#run GSEA
+YCN_gsea <- gseGO(geneList = YCN_genes_ranked,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "BP",
+              minGSSize    = 10,
+              maxGSSize    = 2000,
+              pvalueCutoff = 1,
+              verbose      = FALSE,
+              keyType = "SYMBOL")
+
+#format to df
+YCN_gsea_df <- as.data.frame(YCN_gsea)
+
+#Display dotplot
+#YCN_gsea@result <- YCN_gsea@result[order(YCN_gsea@result$NES, decreasing = FALSE), ]
+#dotplot(YCN_gsea, showCategory = 15) +
+#  ggtitle("TCGA STAD LOY GSEA Downregulated")
+
+#write excel
+write.table(YCN_gsea_df, file = "KIRC_YCN_gsea.tsv", sep = "\t")
+```
+
+
+
+YCN Figures
+```{r}
+#Create negative log10 pvalue and significance cutoff
+YCN_dds_results_filtered$neg_log10_p <- -log10(YCN_dds_results_filtered$pvalue)
+YCN_dds_results_filtered$significance <- ifelse(YCN_dds_results_filtered$pvalue <= .05, "Significant", "Not Significant")
+YCN_dds_results_filtered$gene <- rownames(YCN_dds_results_filtered)
+
+#Highlight 3 selected pathways
+highlighted_pathways <- YCN_gsea_df[c(2, 7, 10), ]
+for (i in 1:nrow(YCN_dds_results_filtered)) {
+  gene <- YCN_dds_results_filtered$gene[i]
+  if (grepl(gene, highlighted_pathways$core_enrichment[1])) {
+    YCN_dds_results_filtered$pathway[i] <- "nuclear-transcribed mRNA poly(A) tail shortening"
+  } else if (grepl(gene, highlighted_pathways$core_enrichment[2])) {
+    YCN_dds_results_filtered$pathway[i] <- "regulation of mitochondrial fission"
+  } else if (grepl(gene, highlighted_pathways$core_enrichment[3])) {
+    YCN_dds_results_filtered$pathway[i] <- "mitotic sister chromatid cohesion"
+  } else {
+    YCN_dds_results_filtered$pathway[i] <- "other"
+  }
+}
+
+#Subset to significant and insignificant genes
+YCN_significant_genes <- subset(YCN_dds_results_filtered, 
+                            abs(log2FoldChange) > 1 & pvalue < 0.05)
+
+#Subset dds for labeling top genes and order correctly
+YCN_dds_gene_labels_df <- as.data.frame(YCN_significant_genes)
+YCN_dds_gene_labels_df <- YCN_dds_gene_labels_df[YCN_dds_gene_labels_df$pathway != "other", ]
+
+#Create volcano plot based on log2fold sort.list()#Create volcano plot based on log2fold change expression
+ggplot(YCN_dds_results_filtered, aes(x = log2FoldChange, y = neg_log10_p)) +
+  geom_point(data = subset(YCN_dds_results_filtered, pathway == "other"), color = "gray", alpha = .5)  +
+  geom_point(data = subset(YCN_significant_genes, pathway == "nuclear-transcribed mRNA poly(A) tail shortening"), color = "red", alpha = 1, size = 3) +
+  geom_point(data = subset(YCN_significant_genes, pathway == "regulation of mitochondrial fission"), color = "green", alpha = 1, size = 3) +
+  geom_point(data = subset(YCN_significant_genes, pathway == "mitotic sister chromatid cohesion"), color = "blue", alpha = 1, size = 3) +
+  theme_classic() +
+  labs(
+    title = "KIRC DDX3X High Expression Upregulated Genes",
+    x = "Log2 Fold Change Expression",
+    y = "-Log10 p-value"
+  ) +
+  geom_text_repel(data = YCN_dds_gene_labels_df, aes(label = gene)) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  theme(legend.position = "none")
+
+#Find -log10fold pvalue for enriched pathways of GSEA
+YCN_gsea_df$neg_log10_p <- -log10(YCN_gsea_df$pvalue)
+
+#Identify pathways of interest
+YCN_highlight_pathways <- YCN_gsea_df[grepl("mitochondria", YCN_gsea_df$Description), ]
+
+#Generate dotplot based on GSEA data
+ggplot(YCN_gsea_df, aes(x = NES, y = neg_log10_p)) +
+  geom_point() +
+  geom_point(data = YCN_highlight_pathways, color ="red", size = 3) +
+  theme_classic() +
+  labs(
+    title = "KIRC DDX3X High Expression Enriched Pathways",
+    x = "NES",
+    y = "-Log10 p-value") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black")
+```
+
+
+
+
+Control Graphs: Make sure immune pathways downregulated in the "LOY" Group
+```{r}
+#Control: Confirm that Immune pathways are downregulated
+ggplot(YCN_gsea_df, aes(x = NES, y = neg_log10_p)) +
+  geom_point() +
+  geom_point(data = YCN_gsea_df[grepl("immun", YCN_gsea_df$Description), ], color ="red", size = 3) +
+  theme_classic() +
+  labs(
+    title = "KIRC YCN Enriched Pathways",
+    x = "NES",
+    y = "-Log10 p-value") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black")
+```
+
+
+
+
+

@@ -1,0 +1,71 @@
+---
+title: "Nature LOY Calls"
+author: "Mason Lynch"
+date: "2025-07-21"
+output: html_document
+---
+
+Setup
+```{r}
+#Install Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(forcats)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+Recapitulate Average Y-CN Figure
+```{r}
+#Load in data
+data <- as.data.frame(read_excel("2024-05-09564D-s3/2024-05-09564D-Supplementary Table 1.xlsx"))
+colnames(data) <- data[1, ]
+data <- data[-1, ]
+
+#Average 
+
+
+
+
+#Make Boxplot
+data$YchrS <- as.numeric(data$YchrS)
+
+ggplot(data, aes(x = fct_reorder(CancerType, YchrS, .fun = median), y = YchrS)) +
+  geom_boxplot() +
+  labs(title = "Grouped Boxplot") +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Cancer Type")
+```
+
+Recapitulate LOY Proportion figure
+```{r}
+#Separate LOY / WTY samples into separate data frames
+LOY_samples <- subset(data, YchrS_level == "LOY_BR")
+WTY_samples <- subset(data, YchrS_level == "WTY_BR")
+
+
+#Count number of LOY / WTY samples per cancer type
+LOY_counts <- as.data.frame(table(LOY_samples$CancerType))
+names(LOY_counts) <- c("Tissue.Type", "Count")
+WTY_counts <- as.data.frame(table(WTY_samples$CancerType))
+names(WTY_counts) <- c("Tissue.Type", "Count")
+
+#Add BRCA back to LOY df
+LOY_BRCA <- data.frame("Tissue.Type" = "BRCA", "Count" = 0)
+LOY_counts <- rbind(LOY_counts, LOY_BRCA)
+LOY_counts <- LOY_counts[match(WTY_counts$Tissue.Type, LOY_counts$Tissue.Type), ]
+
+#Calculate fraction LOY
+tissue_percents <- data.frame("Tissue Type" = LOY_counts$Tissue.Type, "LOY Count" = LOY_counts$Count, "WTY Count" = WTY_counts$Count, "Percent" = WTY_counts$Count/(WTY_counts$Count+LOY_counts$Count))
+
+#Create Bar Graph
+ggplot(tissue_percents, aes(x = fct_reorder(Tissue.Type, Percent), y = Percent)) +
+  geom_bar(stat = "identity")
+```
+
+

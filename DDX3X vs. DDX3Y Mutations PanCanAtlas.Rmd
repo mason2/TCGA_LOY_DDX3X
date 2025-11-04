@@ -1,0 +1,80 @@
+---
+title: "DDX3X vs. DDX3Y Mutation Data"
+author: "Mason Lynch"
+date: "2025-07-22"
+output: html_document
+---
+
+```{r}
+#Install Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(forcats)
+library(maftools)
+library(VennDiagram)
+library(grid)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+Load in Data
+```{r}
+#Mutation Data
+maf_data <- read.maf(maf = "mc3.v0.2.8.PUBLIC.maf.gz")
+mutation_data <- maf_data@data
+```
+
+Analyze DDX3X Mutation Data
+```{r}
+#Identify mutations to DDX3X and DDX3Y
+DDX3X_mutations <- subset(mutation_data, Hugo_Symbol == "DDX3X")
+DDX3Y_mutations <- subset(mutation_data, Hugo_Symbol == "DDX3Y")
+
+
+#Identify IDs of Samples
+DDX3X_sample_ids <- DDX3X_mutations$Tumor_Sample_Barcode
+DDX3Y_sample_ids <- DDX3Y_mutations$Tumor_Sample_Barcode
+
+```
+
+Plot Data
+```{r}
+#Generate Venn Diagram
+venn.diagram <- draw.pairwise.venn(
+  area1 = length(DDX3X_sample_ids),
+  area2 = length(DDX3Y_sample_ids),
+  cross.area = length(intersect(DDX3X_sample_ids, DDX3Y_sample_ids)),
+  category = c("DDX3X", "DDX3Y"),
+  fill = c("pink1", "skyblue"),
+  alpha = .75,
+  cex = 2,
+  cat.cex = 2,
+  cat.fontface = "bold",
+  fontface = "bold",
+  cat.pos = c(0, 0)
+)
+
+#Put this in the command line to generate the venn diagram
+#grid.draw(venn.diagram)
+```
+
+Analyze Overlapping Mutant Samples
+```{r}
+#Identify DDX3X DDX3Y mutant samples
+double_mutants <- DDX3X_sample_ids[DDX3X_sample_ids %in% DDX3Y_sample_ids]
+
+#Subset full data to only double mutant samples
+DDX3X_double_mutants <- DDX3X_mutations[DDX3X_mutations$Tumor_Sample_Barcode %in% double_mutants]
+DDX3Y_double_mutants <- DDX3Y_mutations[DDX3Y_mutations$Tumor_Sample_Barcode %in% double_mutants]
+
+#Export Data
+write.csv(DDX3X_double_mutants, "Double Mutant Information DDX3X.csv")
+write.csv(DDX3Y_double_mutants, "Double Mutant Information DDX3Y.csv")
+```
+
+
+
+

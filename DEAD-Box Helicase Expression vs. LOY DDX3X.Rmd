@@ -1,0 +1,110 @@
+---
+title: "DEAD-Box Helicase Expression vs. LOY DDX3X"
+author: "Mason Lynch"
+date: "2025-08-11"
+output: html_document
+---
+
+```{r}
+#Install Packages
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(stringr)
+library(forcats)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+
+Load in Data
+```{r}
+#TCGA expression
+TCGA_expression <- readRDS("TCGA_TPM_summary_cmb.rds")
+TCGA_expression_df <- as.data.frame(TCGA_expression)
+
+#LOY Status
+TCGA_LOY <- read.csv("sample_LOY_calls_.7cutoff.csv")
+
+#TCGA metadata
+TCGA_metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+
+#Define Helicases of Interest (https://www.nature.com/articles/s41590-022-01149-7)
+DEAD_box_helicases <- c("DDX4", "DDX42", "DDX41", "DDX46", "DDX23", "DDX53", "DDX43", "DDX17", "DDX5", "DDX19B", "DDX19A", "DDX25", "EIF4A3", "EIF4A2", "EIF4A1", "DDX6", "DDX20", "DDX39B", "DDX39A", "DDX50", "DDX21", "DDX18", "DDX10", "DDX55", "DDX31", "DDX51", "DDX56", "DDX28", "DDX24", "DDX49", "DDX47", "DDX54", "INTS6", "DDX59", "DDX52", "DDX3Y")
+```
+
+
+Filter TPm Dataset
+```{r}
+#Only LOY Samples
+TCGA_expression_df <- TCGA_expression_df[, substr(colnames(TCGA_expression_df), 1, 16) %in% substr(TCGA_LOY$Sample_ID[TCGA_LOY$functional_YCN == "LOY"], 1, 16)]
+
+#Only DEAD-box Helicase Expression
+TCGA_expression_df <- rbind(TCGA_expression_df[DEAD_box_helicases, ], TCGA_expression_df["DDX3X", ], TCGA_expression_df["MKI67", ])
+
+#Remove Low TPM Genes
+TCGA_expression_df <- TCGA_expression_df[rowMeans(TCGA_expression_df) > 10, ]
+```
+
+
+Determine correlation and p-Value Of DDX3X and other 
+```{r}
+helicase_lm_summary <- data.frame("correlation_coefficient" = NA, "p_value" = NA)
+for (i in 1:27) {
+  helicase_model <- cor.test(as.numeric(TCGA_expression_df[i, ]),
+                as.numeric(TCGA_expression_df["DDX3X", ]))
+  
+  correlation <-  as.numeric(helicase_model$estimate)
+  cor_pval <- helicase_model$p.value
+  
+  helicase_lm_summary[i, ] <- c(correlation, cor_pval)
+}
+
+#Add gene names
+helicase_lm_summary$gene_symbol <- rownames(TCGA_expression_df[!rownames(TCGA_expression_df) %in% c("DDX3X", "MKI67"), ])
+
+#Transform p-values to corrected p-value
+helicase_lm_summary$adjusted_p_value <- p.adjust(helicase_lm_summary$p_value, method = "BH")
+```
+
+
+Plot Results
+```{r}
+ggplot(helicase_lm_summary, aes(x = fct_reorder(gene_symbol, correlation_coefficient, .fun = mean), y = correlation_coefficient)) +
+  geom_col(aes(fill = adjusted_p_value)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Helicase", y = "Correlation Coefficient Helicase ~ DDX3X", title = "TCGA DEAD-Box Helicase Expression Correlation to DDX3X in LOY")
+```
+
+Control by Proliferation and Re-Plot
+```{r}
+helicase_proliferation_lm_summary <- data.frame("correlation_coefficient" = NA, "p_value" = NA)
+for (i in 1:27) {
+  helicase_model <- cor.test((as.numeric(TCGA_expression_df[i, ]) / as.numeric(TCGA_expression_df["MKI67", ])),
+                as.numeric(TCGA_expression_df["DDX3X", ]))
+  
+  correlation <-  as.numeric(helicase_model$estimate)
+  cor_pval <- helicase_model$p.value
+  
+  helicase_proliferation_lm_summary[i, ] <- c(correlation, cor_pval)
+}
+
+#Add gene names
+helicase_proliferation_lm_summary$gene_symbol <- rownames(TCGA_expression_df[!rownames(TCGA_expression_df) %in% c("DDX3X", "MKI67"), ])
+
+#Transform p-values to corrected p-value
+helicase_proliferation_lm_summary$adjusted_p_value <- p.adjust(helicase_proliferation_lm_summary$p_value, method = "BH")
+
+#Plot Proliferation Controlled
+ggplot(helicase_proliferation_lm_summary, aes(x = fct_reorder(gene_symbol, correlation_coefficient, .fun = mean), y = correlation_coefficient)) +
+  geom_col(aes(fill = adjusted_p_value)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Helicase", y = "PCC Helicase(TPM) / Proliferation ~ DDX3X(TPM)", title = "TCGA DEAD-Box Helicase Expression Correlation to DDX3X in LOY")
+```
+
+
+
+

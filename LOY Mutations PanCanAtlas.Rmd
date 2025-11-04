@@ -1,0 +1,159 @@
+---
+title: "LOY vs. Mutation Data"
+author: "Mason Lynch"
+date: "2025-07-21"
+output: html_document
+---
+
+```{r}
+#Install Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(forcats)
+library(maftools)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+Load in Data
+```{r}
+#LOY Expression Status of Samples
+LOY_expression_data <- as.data.frame(read_excel("2024-05-09564D-s3/2024-05-09564D-Supplementary Table 1.xlsx"))
+colnames(LOY_expression_data) <- LOY_expression_data[1, ]
+LOY_expression_data <- LOY_expression_data[-1, ]
+
+#LOY Segment Data
+LOY_segment_data <- read.csv("sample_LOY_calls_.7cutoff.csv")
+
+#Mutation Data
+maf_data <- read.maf(maf = "mc3.v0.2.8.PUBLIC.maf.gz")
+mutation_data <- maf_data@data
+
+#Load in metadata
+metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+```
+
+
+Subset Male DDX3X Mutation Data
+```{r}
+#Identify mutations to DDX3X
+DDX3X_mutations <- subset(mutation_data, Hugo_Symbol == "DDX3X")
+
+#Add patientid and Sample_ID columns to mutation data
+DDX3X_mutations$patientId <- substr(DDX3X_mutations$Tumor_Sample_Barcode, 1, 12)
+DDX3X_mutations$Sample_ID <- substr(DDX3X_mutations$Tumor_Sample_Barcode, 1, 16)
+colnames(LOY_expression_data)[colnames(LOY_expression_data) == "Sample"] <- "patientId"
+
+#Add patientid column to segment data
+LOY_segment_data$patientId <- substr(LOY_segment_data$Sample_ID, 1, 12)
+
+#Subset mutation data to only male samples
+metadata_male <- metadata[metadata$gender == "MALE", ]
+DDX3X_mutations <- DDX3X_mutations[DDX3X_mutations$patientId %in% metadata_male$bcr_patient_barcode, ]
+```
+
+
+Subset mutation data for both expression and segment data
+```{r}
+#Get corresponding LOY Expression data for DDX3X-mutant samples
+#DDX3X_LOY_expression_combined <- LOY_expression_data[match(DDX3X_mutations$patientId, LOY_expression_data$patientId), ]
+#DDX3X_LOY_expression_combined <- cbind(DDX3X_LOY_expression_combined, DDX3X_mutations)
+#DDX3X_LOY_expression_combined <- DDX3X_LOY_expression_combined[, !duplicated(colnames(DDX3X_LOY_expression_combined))]
+
+#Get corresponding LOY segment data for DDX3X-mutant samples
+DDX3X_LOY_segment_combined <- LOY_segment_data[match(DDX3X_mutations$Sample_ID, substr(LOY_segment_data$Sample_ID, 1, 16)), ]
+DDX3X_LOY_segment_combined <- cbind(DDX3X_LOY_segment_combined, DDX3X_mutations)
+DDX3X_LOY_segment_combined <- DDX3X_LOY_segment_combined[, !duplicated(colnames(DDX3X_LOY_segment_combined))]
+```
+
+
+Chi-squared test: are DDX3X mutations more common in WTY?
+```{r}
+#Determine total number of samples in LOY & WTY groups
+total_LOY <- sum(unique(substr(mutation_data$Tumor_Sample_Barcode, 1, 16)) %in% substr(LOY_segment_data[LOY_segment_data$YCN == "LOY", ]$Sample_ID, 1, 16))
+total_WTY <- sum(unique(substr(mutation_data$Tumor_Sample_Barcode, 1, 16)) %in% substr(LOY_segment_data[LOY_segment_data$YCN == "WTY", ]$Sample_ID, 1, 16))
+
+#Determine number of DDX3X mutant per YCN group
+mutant_LOY <- nrow(DDX3X_LOY_segment_combined[DDX3X_LOY_segment_combined$YCN == "LOY", ])
+mutant_WTY <- nrow(DDX3X_LOY_segment_combined[DDX3X_LOY_segment_combined$YCN == "WTY", ])
+
+#Run chi-squared test
+chi_square_matrix <- matrix(c(mutant_LOY, (total_LOY - mutant_LOY), mutant_WTY, (total_WTY - mutant_WTY)), nrow = 2, byrow = TRUE)
+rownames(chi_square_matrix) <- c("LOY", "WTY")
+colnames(chi_square_matrix) <- c("DDX3X_mutant", "DDX3X_WT")
+chisq.test(chi_square_matrix)
+
+#Download mutation data
+
+```
+
+
+
+Plot Data
+```{r}
+#Plot by LOY expression
+#ggplot(DDX3X_LOY_expression_combined, aes(x = YchrS_level, fill = Variant_Type)) +
+#  geom_bar() +
+#  labs(x = "Y Chromosome Expression Level", y = "Number DDX3X Mutant Male Samples", fill = "Mutation Type") +
+#  theme_classic()
+
+#Plot by LOY segment
+na.omit(DDX3X_LOY_segment_combined) %>%
+ggplot(aes(x = functional_YCN, fill = IMPACT)) +
+  geom_bar() +
+  labs(x = "Y Chromosome Segment Level", y = "Number DDX3X Mutant Male Samples", fill = "IMPACT") +
+  theme_classic()
+```
+
+
+Prepare Mutation Data for Lollipop Plot
+```{r}
+#Divide LOY and WTY data into separate dfs
+LOYonly_DDX3X_LOY_segment_combined <- DDX3X_LOY_segment_combined[DDX3X_LOY_segment_combined$functional_YCN == "LOY", ]
+WTYonly_DDX3X_LOY_segment_combined <- DDX3X_LOY_segment_combined[DDX3X_LOY_segment_combined$functional_YCN == "WTY", ]
+#LOYonly_DDX3X_LOY_expression_combined <- DDX3X_LOY_expression_combined[DDX3X_LOY_expression_combined$YchrS_level == "LOY_BR", ]
+#WTYonly_DDX3X_LOY_expression_combined <- DDX3X_LOY_expression_combined[DDX3X_LOY_expression_combined$YchrS_level == "WTY_BR", ]
+
+#Subset to only columns needed for lollipop plots
+LOYonly_DDX3X_LOY_segment_combined <- LOYonly_DDX3X_LOY_segment_combined %>%
+  group_by(Protein_position) %>%
+  summarize(count = n())
+WTYonly_DDX3X_LOY_segment_combined <- WTYonly_DDX3X_LOY_segment_combined %>%
+  group_by(Protein_position) %>%
+  summarize(count = n())
+#LOYonly_DDX3X_LOY_expression_combined <- LOYonly_DDX3X_LOY_expression_combined %>%
+#  group_by(Protein_position) %>%
+#  summarize(count = n())
+#WTYonly_DDX3X_LOY_expression_combined <- WTYonly_DDX3X_LOY_expression_combined %>%
+#  group_by(Protein_position) %>%
+#  summarize(count = n())
+
+#Remove NA rows
+LOYonly_DDX3X_LOY_segment_combined <- as.data.frame(lapply(LOYonly_DDX3X_LOY_segment_combined, function(x) as.numeric(x)))
+LOYonly_DDX3X_LOY_segment_combined <- na.omit(LOYonly_DDX3X_LOY_segment_combined)
+WTYonly_DDX3X_LOY_segment_combined <- as.data.frame(lapply(WTYonly_DDX3X_LOY_segment_combined, function(x) as.numeric(x)))
+WTYonly_DDX3X_LOY_segment_combined <- na.omit(WTYonly_DDX3X_LOY_segment_combined)
+#LOYonly_DDX3X_LOY_expression_combined <- as.data.frame(lapply(LOYonly_DDX3X_LOY_expression_combined, function(x) as.numeric(x)))
+#LOYonly_DDX3X_LOY_expression_combined <- na.omit(LOYonly_DDX3X_LOY_expression_combined)
+#WTYonly_DDX3X_LOY_expression_combined <- as.data.frame(lapply(WTYonly_DDX3X_LOY_expression_combined, function(x) as.numeric(x)))
+#WTYonly_DDX3X_LOY_expression_combined <- na.omit(WTYonly_DDX3X_LOY_expression_combined)
+```
+
+Generate Lollipop Plot for DDX3X
+```{r}
+#Segment LOY
+lollipopPlot(data = LOYonly_DDX3X_LOY_segment_combined, gene = "DDX3X")
+
+#Segment WTY
+lollipopPlot(data = WTYonly_DDX3X_LOY_segment_combined, gene = "DDX3X")
+
+#Expression LOY
+#lollipopPlot(data = LOYonly_DDX3X_LOY_expression_combined, gene = "DDX3X")
+
+#Expression WTY
+#lollipopPlot(data = WTYonly_DDX3X_LOY_expression_combined, gene = "DDX3X")
+```
+
