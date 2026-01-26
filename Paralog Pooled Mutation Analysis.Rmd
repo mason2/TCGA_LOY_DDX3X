@@ -1,0 +1,325 @@
+---
+title: "Paralog Pooled Mutation Analysis"
+author: "Mason Lynch"
+date: "2025-12-05"
+output: html_document
+---
+
+Setup
+```{r}
+#Install Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(forcats)
+library(maftools)
+library(GenomicRanges)
+library(S4Vectors)
+library(tidyr)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+
+Load in Data
+```{r}
+#Mutation Data
+maf_data <- read.maf(maf = "mc3.v0.2.8.PUBLIC.maf.gz")
+mutation_data <- maf_data@data
+
+#Load in metadata
+metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+
+#Purity Data
+purity <- read_tsv("TCGA_mastercalls.abs_tables_JSedit.fixed.txt")
+
+#LOY Calls
+LOY_segment_data <- read.csv("sample_LOY_calls_.7cutoff.csv")
+
+#XY paralog gane names (from Bellot et al. 2014)
+#https://www.nature.com/articles/nature13206
+x_paralogs <- c("PRKX", "NLGN4X", "TBL1X", "AMELX", "TMSB4X", "TXLNG", "EIF1AX", "ZFX", "USP9X", "DDX3X", "KDM6A", "TSPYL2", "KMD5C", "RPS4X", "RBMX", "SOX3", "HSFX")
+```
+
+
+Compile Mutations for LOY and WTY and Annotate Dependency for Each Paralog
+```{r}
+#Subset to mutations of genes of interest
+mutation_data <- mutation_data[mutation_data$Hugo_Symbol %in% x_paralogs, ]
+
+#Match sample IDs between data sheets
+mutation_data$Tumor_Sample_Barcode <- substr(mutation_data$Tumor_Sample_Barcode, 1, 16)
+
+#Define functional YCN for each mutation
+mutation_data <- left_join(mutation_data, LOY_segment_data, by = c("Tumor_Sample_Barcode" = "Sample_ID"))
+
+#Remove mutations without a functional YCN call
+mutation_data <- mutation_data[complete.cases(mutation_data$functional_YCN), ]
+
+#separate to paralogs with significant/nonsignificant changes to dependency in LOY (refer to DepMap Paralog Analysis)
+significant_paralogs <- c("DDX3X", "EIF1AX", "RPS4X", "ZFX")
+nonsignificant_paralogs <- x_paralogs[!x_paralogs %in% significant_paralogs]
+
+#label individual mutations as significant/nonsignificant (significant = 1, nonsignificant = 0)
+mutation_data$dependency <- ifelse(mutation_data$Hugo_Symbol %in% significant_paralogs,
+                                   "significant",
+                                   "nonsignificant")
+```
+
+
+Unfiltered Analysis of Significant and Nonsignificant by YCN
+```{r}
+#chi-squared test for mutation frequency in significant pool
+mutant_LOY_significant <- length(mutation_data$Tumor_Sample_Barcode[mutation_data$functional_YCN == "LOY" & mutation_data$dependency == "significant"])
+mutant_WTY_significant <- length(mutation_data$Tumor_Sample_Barcode[mutation_data$functional_YCN == "WTY" & mutation_data$dependency == "significant"])
+total_LOY <- nrow(LOY_segment_data[LOY_segment_data$functional_YCN == "LOY" & complete.cases(LOY_segment_data$functional_YCN), ])
+total_WTY <- nrow(LOY_segment_data[LOY_segment_data$functional_YCN == "WTY" & complete.cases(LOY_segment_data$functional_YCN), ])
+chisq_matrix_significant <- matrix(c(mutant_LOY_significant, total_LOY,
+                          mutant_WTY_significant, total_WTY),
+                        nrow = 2, byrow = TRUE)
+
+chisq_test_significant<- suppressWarnings(chisq.test(chisq_matrix_significant, correct = TRUE))
+
+
+#chi-squared test for mutation frequency in nonsignificant pool
+mutant_LOY_nonsignificant <- length(mutation_data$Tumor_Sample_Barcode[mutation_data$functional_YCN == "LOY" & mutation_data$dependency == "nonsignificant"])
+mutant_WTY_nonsignificant <- length(mutation_data$Tumor_Sample_Barcode[mutation_data$functional_YCN == "WTY" & mutation_data$dependency == "nonsignificant"])
+chisq_matrix_nonsignificant <- matrix(c(mutant_LOY_nonsignificant, total_LOY,
+                          mutant_WTY_nonsignificant, total_WTY),
+                        nrow = 2, byrow = TRUE)
+
+chisq_test_nonsignificant<- suppressWarnings(chisq.test(chisq_matrix_nonsignificant, correct = TRUE))
+
+
+#plot ratio of significant in LOY vs. WTY
+significant_mut_plot <- data.frame("functional_YCN" = c("LOY", "WTY"),
+           "mutant" = c(mutant_LOY_significant, mutant_WTY_significant),
+           "total" = c(total_LOY, total_WTY))
+ggplot(significant_mut_plot, aes(fill = functional_YCN,
+             x = functional_YCN, y = mutant /total)) +
+  geom_col(position = "dodge") +
+  theme_classic() +
+  geom_text(
+    aes(label = paste0(mutant, "/", total)),
+    vjust = -0.3,
+    size = 4
+  ) +
+  annotate(
+  "text",
+  x = 1.5,
+  y = 1.15 * max(significant_mut_plot$mutant / significant_mut_plot$total),
+  label = paste0("p = ", sprintf("%.4f", chisq_test_significant$p.value), " (chi-squared test)"),
+  size = 4
+) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  labs(x = "Functional YCN",
+       y = "Mutant Proportion of Samples",
+       title = "Significant Paralog Mutation Frequency")
+
+
+#plot ratio of nonsignificant in LOY vs. WTY
+nonsignificant_mut_plot <- data.frame("functional_YCN" = c("LOY", "WTY"),
+           "mutant" = c(mutant_LOY_nonsignificant, mutant_WTY_nonsignificant),
+           "total" = c(total_LOY, total_WTY))
+ggplot(nonsignificant_mut_plot, aes(fill = functional_YCN,
+             x = functional_YCN, y = mutant /total)) +
+  geom_col(position = "dodge") +
+  theme_classic() +
+  geom_text(
+    aes(label = paste0(mutant, "/", total)),
+    vjust = -0.3,
+    size = 4
+  ) +
+  annotate(
+  "text",
+  x = 1.5,
+  y = 1.15 * max(nonsignificant_mut_plot$mutant / nonsignificant_mut_plot$total),
+  label = paste0("p < .0001 ", " (chi-squared test)"),
+  size = 4
+) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  labs(x = "Functional YCN",
+       y = "Mutant Proportion of Samples",
+       title = "Nonsignificant Paralog Mutation Frequency")
+```
+
+
+Filter to Mutations with Likely Functional Impact
+```{r}
+#Calculate VAF
+mutation_data$vaf <- mutation_data$t_alt_count / (mutation_data$t_alt_count + mutation_data$t_ref_count)
+
+#Limit to clonal mutations (40%+ VAF) (our LOY calls begin at 70%, this guarantees >10% overlap with the LOY fraction)
+clonal_mutations <- mutation_data[mutation_data$vaf >= .4, ]
+
+#Remove missense mutations and in-frame indels
+impactful_mutations <- clonal_mutations[clonal_mutations$Variant_Classification != "Missense_Mutation" &
+                                             clonal_mutations$Variant_Classification != "In_Frame_Del" &
+                                             clonal_mutations$Variant_Classification != "In_Frame_Ins", ]
+```
+
+
+Analysis of Clonal Mutations by YCN
+```{r}
+#chi-squared test for mutation frequency in significant pool
+mutant_LOY_significant_clonal <- length(clonal_mutations$Tumor_Sample_Barcode[clonal_mutations$functional_YCN == "LOY" & clonal_mutations$dependency == "significant"])
+mutant_WTY_significant_clonal <- length(clonal_mutations$Tumor_Sample_Barcode[clonal_mutations$functional_YCN == "WTY" & clonal_mutations$dependency == "significant"])
+chisq_matrix_significant_clonal <- matrix(c(mutant_LOY_significant_clonal, total_LOY,
+                          mutant_WTY_significant_clonal, total_WTY),
+                        nrow = 2, byrow = TRUE)
+
+chisq_test_significant_clonal <- suppressWarnings(chisq.test(chisq_matrix_significant_clonal, correct = TRUE))
+
+
+#chi-squared test for mutation frequency in nonclonal pool
+mutant_LOY_nonsignificant_clonal <- length(clonal_mutations$Tumor_Sample_Barcode[clonal_mutations$functional_YCN == "LOY" & clonal_mutations$dependency == "nonsignificant"])
+mutant_WTY_nonsignificant_clonal <- length(clonal_mutations$Tumor_Sample_Barcode[clonal_mutations$functional_YCN == "WTY" & clonal_mutations$dependency == "nonsignificant"])
+chisq_matrix_nonsignificant_clonal <- matrix(c(mutant_LOY_nonsignificant_clonal, total_LOY,
+                          mutant_WTY_nonsignificant_clonal, total_WTY),
+                        nrow = 2, byrow = TRUE)
+
+chisq_test_nonsignificant_clonal <- suppressWarnings(chisq.test(chisq_matrix_nonsignificant_clonal, correct = TRUE))
+
+
+#plot ratio of clonal significant in LOY vs. WTY
+significant_clonal_mut_plot <- data.frame("functional_YCN" = c("LOY", "WTY"),
+           "mutant" = c(mutant_LOY_significant_clonal, mutant_WTY_significant_clonal),
+           "total" = c(total_LOY, total_WTY))
+ggplot(significant_clonal_mut_plot, aes(fill = functional_YCN,
+             x = functional_YCN, y = mutant /total)) +
+  geom_col(position = "dodge") +
+  theme_classic() +
+  geom_text(
+    aes(label = paste0(mutant, "/", total)),
+    vjust = -0.3,
+    size = 4
+  ) +
+  annotate(
+  "text",
+  x = 1.5,
+  y = 1.15 * max(significant_clonal_mut_plot$mutant / significant_clonal_mut_plot$total),
+  label = paste0("p = ", sprintf("%.4f", chisq_test_significant_clonal$p.value), " (chi-squared test)"),
+  size = 4
+) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  labs(x = "Functional YCN",
+       y = "Mutant Proportion of Samples",
+       title = "Significant Paralog Mutation Frequency (40% Clonality)")
+
+
+#plot ratio of clonal nonsignificant in LOY vs. WTY
+nonsignificant_clonal_mut_plot <- data.frame("functional_YCN" = c("LOY", "WTY"),
+           "mutant" = c(mutant_LOY_nonsignificant_clonal, mutant_WTY_nonsignificant_clonal),
+           "total" = c(total_LOY, total_WTY))
+ggplot(nonsignificant_clonal_mut_plot, aes(fill = functional_YCN,
+             x = functional_YCN, y = mutant /total)) +
+  geom_col(position = "dodge") +
+  theme_classic() +
+  geom_text(
+    aes(label = paste0(mutant, "/", total)),
+    vjust = -0.3,
+    size = 4
+  ) +
+  annotate(
+  "text",
+  x = 1.5,
+  y = 1.15 * max(nonsignificant_clonal_mut_plot$mutant / nonsignificant_clonal_mut_plot$total),
+  label = paste0("p < .0001 ", " (chi-squared test)"),
+  size = 4
+) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  labs(x = "Functional YCN",
+       y = "Mutant Proportion of Samples",
+       title = "Nonsignificant Paralog Mutation Frequency (40% Clonality)")
+```
+
+
+Analysis of Clonal, Impactful Mutations by YCN
+```{r}
+#chi-squared test for mutation frequency in significant pool
+mutant_LOY_significant_filtered <- length(impactful_mutations$Tumor_Sample_Barcode[impactful_mutations$functional_YCN == "LOY" & impactful_mutations$dependency == "significant"])
+mutant_WTY_significant_filtered <- length(impactful_mutations$Tumor_Sample_Barcode[impactful_mutations$functional_YCN == "WTY" & impactful_mutations$dependency == "significant"])
+chisq_matrix_significant_filtered <- matrix(c(mutant_LOY_significant_filtered, total_LOY,
+                          mutant_WTY_significant_filtered, total_WTY),
+                        nrow = 2, byrow = TRUE)
+
+chisq_test_significant_filtered <- suppressWarnings(chisq.test(chisq_matrix_significant_filtered, correct = TRUE))
+
+
+#chi-squared test for mutation frequency in nonsignificant pool
+mutant_LOY_nonsignificant_filtered <- length(impactful_mutations$Tumor_Sample_Barcode[impactful_mutations$functional_YCN == "LOY" & impactful_mutations$dependency == "nonsignificant"])
+mutant_WTY_nonsignificant_filtered <- length(impactful_mutations$Tumor_Sample_Barcode[impactful_mutations$functional_YCN == "WTY" & impactful_mutations$dependency == "nonsignificant"])
+chisq_matrix_nonsignificant_filtered <- matrix(c(mutant_LOY_nonsignificant_filtered, total_LOY,
+                          mutant_WTY_nonsignificant_filtered, total_WTY),
+                        nrow = 2, byrow = TRUE)
+
+chisq_test_nonsignificant_filtered <- suppressWarnings(chisq.test(chisq_matrix_nonsignificant_filtered, correct = TRUE))
+
+
+#plot ratio of clonal significant in LOY vs. WTY
+significant_filtered_mut_plot <- data.frame("functional_YCN" = c("LOY", "WTY"),
+           "mutant" = c(mutant_LOY_significant_filtered, mutant_WTY_significant_filtered),
+           "total" = c(total_LOY, total_WTY))
+ggplot(significant_filtered_mut_plot, aes(fill = functional_YCN,
+             x = functional_YCN, y = mutant /total)) +
+  geom_col(position = "dodge") +
+  theme_classic() +
+  geom_text(
+    aes(label = paste0(mutant, "/", total)),
+    vjust = -0.3,
+    size = 4
+  ) +
+  annotate(
+  "text",
+  x = 1.5,
+  y = 1.15 * max(significant_filtered_mut_plot$mutant / significant_filtered_mut_plot$total),
+  label = paste0("p = ", sprintf("%.4f", chisq_test_significant_filtered$p.value), " (chi-squared test)"),
+  size = 4
+) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  labs(x = "Functional YCN",
+       y = "Mutant Proportion of Samples",
+       title = "Significant Paralog Mutation Frequency (40% Clonality & Functional Impact)")
+
+
+#plot ratio of clonal nonsignificant in LOY vs. WTY
+nonsignificant_filtered_mut_plot <- data.frame("functional_YCN" = c("LOY", "WTY"),
+           "mutant" = c(mutant_LOY_nonsignificant_filtered, mutant_WTY_nonsignificant_filtered),
+           "total" = c(total_LOY, total_WTY))
+ggplot(nonsignificant_filtered_mut_plot, aes(fill = functional_YCN,
+             x = functional_YCN, y = mutant /total)) +
+  geom_col(position = "dodge") +
+  theme_classic() +
+  geom_text(
+    aes(label = paste0(mutant, "/", total)),
+    vjust = -0.3,
+    size = 4
+  ) +
+  annotate(
+  "text",
+  x = 1.5,
+  y = 1.15 * max(nonsignificant_filtered_mut_plot$mutant / nonsignificant_filtered_mut_plot$total),
+  label = paste0("p < .0001", " (chi-squared test)"),
+  size = 4
+) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  labs(x = "Functional YCN",
+       y = "Mutant Proportion of Samples",
+       title = "Nonsignificant Paralog Mutation Frequency (40% Clonality & Functional Impact)")
+```
+
+

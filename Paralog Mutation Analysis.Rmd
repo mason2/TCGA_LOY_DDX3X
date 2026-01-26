@@ -60,7 +60,7 @@ mutation_data <- left_join(mutation_data, LOY_segment_data, by = c("Tumor_Sample
 Loop Chi-Squared Tests for All X-Paralogs
 ```{r}
 mutation_chi_sq <- data.frame("Symbol" = character(),
-                              "chi_sq" = numeric(),
+                              "p_value" = numeric(),
                               "mutant_LOY" = numeric(),
                               "mutant_WTY" = numeric())
 
@@ -84,7 +84,7 @@ for (i in seq_along(x_paralogs)){
 
   mutation_chi_sq <- rbind(mutation_chi_sq,
     data.frame(Symbol = gene,
-               chi_sq = chisq_result$statistic,
+               p_value = chisq_result$p.value,
                mutant_LOY = mutant_LOY,
                mutant_WTY = mutant_WTY,
                Direction = direction))
@@ -126,7 +126,7 @@ for (i in seq_along(x_paralogs)){
 
 
 
-Loop T-test between VAF of LOY mutations and WTY mutations
+Loop T-test for IMPACT of LOY mutations and WTY mutations
 ```{r}
 #Run T-tests
 mutation_impact <- data.frame("Symbol" = character(),
@@ -159,7 +159,7 @@ for (i in seq_along(x_paralogs)){
 
   mutation_impact <- rbind(mutation_impact,
     data.frame(Symbol = gene,
-               chi_sq = chisq_result$statistic,
+               p_value = chisq_result$p.value,
                high_LOY = high_LOY,
                high_WTY = high_WTY,
                moderate_LOY = moderate_LOY,
@@ -168,7 +168,7 @@ for (i in seq_along(x_paralogs)){
   } else{
     mutation_impact <- rbind(mutation_impact,
     data.frame(Symbol = gene,
-               chi_sq = NA,
+               p_value = NA,
                high_LOY = high_LOY,
                high_WTY = high_WTY,
                moderate_LOY = moderate_LOY,
@@ -179,12 +179,115 @@ for (i in seq_along(x_paralogs)){
 ```
 
 
-Display Results
+Prepare Results for Displaying
 ```{r}
+#Convert all mutation counts into ratios
+mutation_chi_sq$mutant_LOY <- mutation_chi_sq$mutant_LOY / total_LOY
+mutation_chi_sq$mutant_WTY <- mutation_chi_sq$mutant_WTY / total_WTY
+
+mutation_impact$high_LOY <- mutation_impact$high_LOY / total_LOY
+mutation_impact$moderate_LOY <- mutation_impact$moderate_LOY / total_LOY
+mutation_impact$high_WTY <- mutation_impact$high_WTY / total_WTY
+mutation_impact$moderate_WTY <- mutation_impact$moderate_WTY / total_WTY
+
+mutation_impact$high_moderate_ratio_LOY <- mutation_impact$high_LOY / mutation_impact$moderate_LOY
+mutation_impact$high_moderate_ratio_WTY <- mutation_impact$high_WTY / mutation_impact$moderate_WTY
+
+
 #Convert data frames to long format
+mutation_chi_sq_long <- mutation_chi_sq %>%
+  pivot_longer(
+    cols = c(mutant_LOY, mutant_WTY),
+    names_to = "YCN",
+    values_to = "Ratio"
+  )
 
+mutation_clonality_long <- mutation_clonality %>%
+  pivot_longer(
+    cols = c(average_vaf_LOY, average_vaf_WTY),
+    names_to = "YCN",
+    values_to = "Ratio"
+  )
 
+mutation_impact_long <- mutation_impact %>%
+  pivot_longer(
+    cols = c(high_moderate_ratio_LOY, high_moderate_ratio_WTY),
+    names_to = "YCN",
+    values_to = "Ratio"
+  )
+
+#Convert p-values to stars
+mutation_chi_sq_long$p_star <- ifelse(
+  mutation_chi_sq_long$p_value < 0.001, "***",
+  ifelse(
+    mutation_chi_sq_long$p_value < 0.01, "**",
+    ifelse(
+      mutation_chi_sq_long$p_value < 0.05, "*",
+      ""
+    )
+  )
+)
+
+mutation_clonality_long$p_star <- ifelse(
+  mutation_clonality_long$p_value < 0.001, "***",
+  ifelse(
+    mutation_clonality_long$p_value < 0.01, "**",
+    ifelse(
+      mutation_clonality_long$p_value < 0.05, "*",
+      ""
+    )
+  )
+)
+
+mutation_impact_long$p_star <- ifelse(
+  mutation_impact_long$p_value < 0.001, "***",
+  ifelse(
+    mutation_impact_long$p_value < 0.01, "**",
+    ifelse(
+      mutation_impact_long$p_value < 0.05, "*",
+      ""
+    )
+  )
+)
 ```
+
+
+Plot Results
+```{r}
+#Display mutation frequency
+ggplot(mutation_chi_sq_long, aes(x = Symbol, y = Ratio, fill = YCN)) +
+  geom_bar(stat = "identity", position = position_dodge(width = .9)) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  theme_classic() +
+  labs(x = "X-Paralog", y = "Mutation Frequency") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(aes(x = Symbol, y = .07, label = p_star),
+            inherit.aes = FALSE)
+
+ggplot(mutation_clonality_long, aes(x = Symbol, y = Ratio, fill = YCN)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  theme_classic() +
+  labs(x = "X-Paralog", y = "Average Mutation Clonality") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(aes(x = Symbol, y = .007, label = p_star),
+            inherit.aes = FALSE)
+
+ggplot(mutation_impact_long, aes(x = Symbol, y = Ratio, fill = YCN)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  theme_classic() +
+  labs(x = "X-Paralog", y = "Ratio High Impact / Ratio Moderate Impact") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(aes(x = Symbol, y = 2, label = p_star),
+            inherit.aes = FALSE)
+```
+
+
+
+
+
+
 
 
 

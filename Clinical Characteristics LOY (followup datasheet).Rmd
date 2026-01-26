@@ -42,13 +42,13 @@ expression_calls <- expression_calls[-1, ]
 ```
 
 
-LOY Kaplan-Meier Curve
+LOY Overall Survival Kaplan-Meier Curve
 ```{r}
 #Limit to patients with LOY call
 TCGA_metadata_YCN <- TCGA_metadata[TCGA_metadata$bcr_patient_barcode %in% TCGA_LOY$patientId, ]
 
 #Define Functional LOY/WTY for each sample
-TCGA_metadata_YCN <- left_join(TCGA_metadata_YCN, TCGA_LOY[, c(6, 7)], by = c("bcr_patient_barcode" = "patientId"))
+TCGA_metadata_YCN <- left_join(TCGA_metadata_YCN, TCGA_LOY[, c(5, 6)], by = c("bcr_patient_barcode" = "patientId"))
 
 #Limit to patients with functional_YCN call
 TCGA_metadata_YCN <- TCGA_metadata_YCN[!is.na(TCGA_metadata_YCN$functional_YCN), ]
@@ -75,20 +75,26 @@ ggsurvplot(
   data = TCGA_metadata_YCN,
   pval = TRUE,
   conf.int = FALSE,
-  palette = c("steelblue", "tomato"),
+  palette = c("steelblue4", "skyblue"),
   legend.title = "Functional YCN",
   legend.labs = c("LOY", "WTY"),
   xlab = "Time (days)",
   ylab = "Survival probability",
-  title = "Functional YCN Overall Survival"
+  title = "Functional YCN Overall Survival Probability"
 )
 ```
 
+
+
 YCN Survival by Tissue Type
 ```{r}
-#Take p-value of differences in survival time 
+#Define tissue types and manually remove tissues without both LOY and WTY representation
+tissue_types <- unique(TCGA_metadata_YCN$acronym)
+tissue_types <- tissue_types[!tissue_types %in% c("BRCA", "GBM", "PRAD")]
+
+
+#Take p-value of differences in survival time (also remove BRCA because there is only one sample)
 YCN_survival_tissue <- data.frame("tissue" = NA, "p_value" = NA)
-tissue_types <- unique(TCGA_metadata_LOY$acronym)
 for (i in 1:length(tissue_types)) {
   tissue <- tissue_types[i]
   TCGA_metadata_tissue <- TCGA_metadata_YCN[TCGA_metadata_YCN$acronym == tissue, ]

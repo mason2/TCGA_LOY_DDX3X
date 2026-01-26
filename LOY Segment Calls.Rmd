@@ -207,6 +207,9 @@ sample_LOY_calls$functional_YCN <- ifelse(sample_LOY_calls$Sample_ID %in% LOY_ov
 
 Save Samples
 ```{r}
+#For ease, also define patientID
+sample_LOY_calls$patientId <- substr(sample_LOY_calls$Sample_ID, 1, 12)
+
 #write.csv(sample_LOY_calls, "sample_LOY_calls_.7cutoff.csv")
 ```
 

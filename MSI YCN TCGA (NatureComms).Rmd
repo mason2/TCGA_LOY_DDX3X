@@ -1,0 +1,177 @@
+---
+title: "TCGA MSI LOY"
+author: "Mason Lynch"
+date: "2025-12-08"
+output: html_document
+---
+
+Setup
+```{r}
+#Install Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(forcats)
+library(maftools)
+library(GenomicRanges)
+library(S4Vectors)
+library(tidyr)
+library(stringr)
+library(ggpubr)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+```
+
+
+Load in and Format Data
+```{r}
+#LOY Calls
+LOY_segment_data <- read.csv("sample_LOY_calls_.7cutoff.csv")
+
+#MSISensor Scores from Ding et al. 2018 (Cell)
+MSI_scores <- suppressWarnings(read_tsv("ncomms15180-s2.tsv"))
+
+#Load in metadata
+metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+
+#join YCN and MSI status
+MSI_YCN <- left_join(LOY_segment_data, MSI_scores, by = c("patientId" = "Barcode"))
+
+#join tissue type
+MSI_YCN <- left_join(MSI_YCN, metadata[, 2:3], by = c("patientId" = "bcr_patient_barcode"))
+```
+
+
+Measure MSISensor Scores vs. Functional YCN
+```{r}
+#Subset to functional YCN only samples
+MSI_functional_YCN <- MSI_YCN[complete.cases(MSI_YCN$functional_YCN), ]
+
+
+#Fisher's exact test analyzing MSI as a binary
+MSI_WTY_cutoff <- nrow(MSI_functional_YCN[MSI_functional_YCN$functional_YCN == "WTY" &
+                                            MSI_functional_YCN$MSI_category_nb_from_TCGA_consortium == "msi-h" &
+                                            complete.cases(MSI_functional_YCN$MSI_category_nb_from_TCGA_consortium), ])
+MSI_LOY_cutoff <- nrow(MSI_functional_YCN[MSI_functional_YCN$functional_YCN == "LOY" &
+                                            MSI_functional_YCN$MSI_category_nb_from_TCGA_consortium == "msi-h" &
+                                            complete.cases(MSI_functional_YCN$MSI_category_nb_from_TCGA_consortium), ])
+total_WTY <- nrow(MSI_functional_YCN[MSI_functional_YCN$functional_YCN == "WTY", ])
+total_LOY <- nrow(MSI_functional_YCN[MSI_functional_YCN$functional_YCN == "LOY", ])
+
+fisher_matrix_cutoff <- matrix(c(MSI_LOY_cutoff, total_LOY - MSI_LOY_cutoff,
+                          MSI_WTY_cutoff, total_WTY - MSI_WTY_cutoff),
+                          nrow = 2, byrow = TRUE)
+
+fisher_result_cutoff <- suppressWarnings(fisher.test(fisher_matrix_cutoff))
+
+
+#Turn chi-squared matrix into plottable data frame
+MSI_functional_YCN_plot <- data.frame("functional_YCN" = c("LOY", "WTY"),
+                                      "msi_h" = c(MSI_LOY_cutoff, MSI_WTY_cutoff),
+                                      "total" = c(total_LOY, total_WTY))
+
+
+
+#Plot MSISensor scores by YCN
+ggplot(MSI_functional_YCN_plot, aes(fill = functional_YCN,
+             x = functional_YCN, y = msi_h /total)) +
+  geom_col(position = "dodge") +
+  theme_classic() +
+  geom_text(
+    aes(label = paste0(msi_h, "/", total)),
+    vjust = -0.3,
+    size = 4
+  ) +
+  annotate(
+  "text",
+  x = 1.5,
+  y = 1.15 * max(MSI_functional_YCN_plot$msi_h / MSI_functional_YCN_plot$total),
+  label = paste0("p = ", sprintf("%.4f", fisher_result_cutoff$p.value), " (Fisher's exact test)"),
+  size = 4
+) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  labs(x = "Functional YCN",
+       y = "msi-h Proportion",
+       title = "NatureComms msi-h Frequency by Functional YCN (TCGA)")
+```
+
+
+
+Identify Tissues with Significantly Fewer MSI Cases in LOY
+```{r}
+#identify tissue types of interest
+#included_tissues <- unique(MSI_functional_YCN$acronym)[!unique(MSI_functional_YCN$acronym) %in% excluded_tissues] 
+
+#Format data frame for analysis
+MSI_frequency <- data.frame("acronym" = character(23),
+                            "LOY_MSI_frequency" = numeric(23),
+                            "LOY_MSI_count" = numeric(23),
+                            "LOY_total_count" = numeric(23),
+                            "WTY_MSI_frequency" = numeric(23),
+                            "WTY_MSI_count" = numeric(23),
+                            "WTY_total_count" = numeric(23),
+                            "fisher_pvalue" = numeric(23)
+)
+
+#Loop to run Fisher's exact test for each tissue type
+for (i in seq_along(included_tissues)){
+  tissue <- included_tissues[i]
+  MSI_samples_tissue <- MSI_functional_YCN[MSI_functional_YCN$acronym == tissue, ]
+  
+  LOY_MSI_tissue <- sum(MSI_samples_tissue[MSI_samples_tissue$functional_YCN == "LOY", ]$MSI_category_nb_from_TCGA_consortium == "msi-h")
+  WTY_MSI_tissue <- sum(MSI_samples_tissue[MSI_samples_tissue$functional_YCN == "WTY", ]$MSI_category_nb_from_TCGA_consortium == "msi-h")
+  LOY_total_tissue <- sum(MSI_samples_tissue$functional_YCN == "LOY")
+  WTY_total_tissue <- sum(MSI_samples_tissue$functional_YCN == "WTY")
+  
+  fisher_matrix_tissue <- matrix(c(LOY_MSI_tissue, LOY_total_tissue - LOY_MSI_tissue,
+                          WTY_MSI_tissue, WTY_total_tissue - WTY_MSI_tissue),
+                          nrow = 2, byrow = TRUE)
+  fisher_result_tissue <- suppressWarnings(fisher.test(fisher_matrix_tissue))
+  
+  MSI_frequency$acronym[i] <- tissue
+  MSI_frequency$LOY_MSI_frequency[i] <- LOY_MSI_tissue/LOY_total_tissue
+  MSI_frequency$LOY_MSI_count[i] <- LOY_MSI_tissue
+  MSI_frequency$LOY_total_count[i] <- LOY_total_tissue
+  MSI_frequency$WTY_MSI_frequency[i] <- WTY_MSI_tissue/WTY_total_tissue
+  MSI_frequency$WTY_MSI_count[i] <- WTY_MSI_tissue
+  MSI_frequency$WTY_total_count[i] <- WTY_total_tissue
+  MSI_frequency$fisher_pvalue[i] <- fisher_result_tissue$p.value
+}
+
+#Identify tissues of interest and plot MSI frequency vs. YCN using the summary table
+#In this case, only COAD has more frequent MSI in WTY than LOY
+tissue_plot <- "COAD"
+
+tissue_plot_df <- data.frame("functional_YCN" = c("LOY", "WTY"),
+           "msi" = c(MSI_frequency$LOY_MSI_count[MSI_frequency$acronym == tissue_plot], MSI_frequency$WTY_MSI_count[MSI_frequency$acronym == tissue_plot]),
+           "total" = c(MSI_frequency$LOY_total_count[MSI_frequency$acronym == tissue_plot], MSI_frequency$WTY_total_count[MSI_frequency$acronym == tissue_plot]))
+
+ggplot(tissue_plot_df, aes(fill = functional_YCN,
+             x = functional_YCN, y = msi /total)) +
+  geom_col(position = "dodge") +
+  theme_classic() +
+  geom_text(
+    aes(label = paste0(msi, "/", total)),
+    vjust = -0.3,
+    size = 4
+  ) +
+  annotate(
+  "text",
+  x = 1.5,
+  y = 1.15 * max(tissue_plot_df$msi / tissue_plot_df$total),
+  label = paste0("p = ", sprintf("%.4f", MSI_frequency$fisher_pvalue[MSI_frequency$acronym == tissue_plot]), " (Fisher's exact test)"),
+  size = 4
+) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
+  labs(x = "Functional YCN",
+       y = "MSI Proportion",
+       title = paste0(tissue_plot, " MSI Frequency by Functional YCN (MSISensor TCGA)"))
+```
+
+

@@ -44,7 +44,7 @@ TCGA_LOY$Sample_ID <- str_sub(TCGA_LOY$Sample_ID, 1,16)
 #Subset to only samples found in segment data (which should include only male samples)
 TCGA_expression_DDX3X_male <- TCGA_expression_DDX3X[, colnames(TCGA_expression_DDX3X) %in% TCGA_LOY$Sample_ID]
 
-#Add YCN Status to TCGA data
+#Transpose expression data
 TCGA_expression_DDX3X_male <- as.data.frame(t(TCGA_expression_DDX3X_male))
 
 #Match sample order of expression and CN data and add YCN status
@@ -81,21 +81,25 @@ TCGA_expression_DDX3X_male %>%
   geom_boxplot(aes(color = YCN,
                    fill = YCN), width = 0.1,alpha =0.5, outliers = F) + 
   theme_classic() +
-  scale_color_manual(values = c("steelblue4", "steelblue1")) +
-  scale_fill_manual(values = c("steelblue4", "steelblue1")) +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
   labs(x = "Y-Chromosome Copy Number Level", y = "DDX3X Expression (TPM)", title = "YCN vs. DDX3X Expression") +
   theme(legend.position = "none") -> p2
 
 ggarrange(p2, ncol = 2)
 
 #Run T-Test
-t.test(DDX3X ~ functional_YCN, data = TCGA_expression_DDX3X_male)
+t.test(TCGA_expression_DDX3X_male[TCGA_expression_DDX3X_male$functional_YCN == "LOY", ]$DDX3X,
+       TCGA_expression_DDX3X_male[TCGA_expression_DDX3X_male$functional_YCN == "WTY", ]$DDX3X)
 ```
 
 DDX3X vs. YCN By Tissue Type
 ```{r}
 #Add Tissue Type Column to Samples
 TCGA_expression_DDX3X_male <- left_join(TCGA_expression_DDX3X_male, TCGA_metadata[TCGA_metadata$bcr_patient_barcode %in% TCGA_expression_DDX3X_male$patientId, ], by = c( "patientId" = "bcr_patient_barcode"))
+
+#Remove Tissue Types with only WTY
+TCGA_expression_DDX3X_male <- TCGA_expression_DDX3X_male[!TCGA_expression_DDX3X_male$acronym %in% c("BRCA", "GBM", "PRAD"), ]
 
 #Plot
 TCGA_expression_DDX3X_male %>%
@@ -108,10 +112,14 @@ TCGA_expression_DDX3X_male %>%
                outlier.shape = NA,
                position = position_dodge(width = 0.9)) + 
   theme_classic() +
-  scale_color_manual(values = c("steelblue4", "steelblue1")) +
-  scale_fill_manual(values = c("steelblue4", "steelblue1")) +
+  scale_color_manual(values = c("steelblue4", "skyblue")) +
+  scale_fill_manual(values = c("steelblue4", "skyblue")) +
   labs(x = "Tissue Type",
        y = "DDX3X Expression (TPM)",
        title = "LOY vs WTY DDX3X Expression by Tissue Type") +
+  stat_compare_means(aes(group = functional_YCN), 
+                     method = "wilcox.test", 
+                     label = "p.signif",
+                     comparisons = NULL) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
