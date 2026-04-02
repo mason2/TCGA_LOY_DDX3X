@@ -28,14 +28,14 @@ setwd("/Users/mplynch/Desktop/DDX3X TCGA")
 Load in and Format Data
 ```{r}
 #LOY Calls
-LOY_segment_data <- read.csv("sample_LOY_calls_.7cutoff.csv")
+LOY_segment_data <- read.csv("/Users/mplynch/Desktop/DDX3X TCGA/sample_LOY_calls_.7cutoff.csv")
 
 #MSISensor Scores from Bailey et al. 2018 (Cell)
-MSI_scores <- suppressWarnings(read_excel("MSISensor_TCGA_Ding_2018.xlsx"))
+MSI_scores <- suppressWarnings(read_excel("/Users/mplynch/Desktop/DDX3X TCGA/MSISensor_TCGA_Ding_2018.xlsx"))
 colnames(MSI_scores)[2] <- "MSISensor_score"
 
 #Load in metadata
-metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+metadata <- read_tsv("/Users/mplynch/Desktop/DDX3X TCGA/clinical_PANCAN_patient_with_followup.tsv")
 
 #join YCN and MSI status
 MSI_YCN <- left_join(LOY_segment_data, MSI_scores, by = c("patientId" = "Participant Barcode"))
@@ -77,20 +77,29 @@ chisq_result_cutoff$p.value
 
 #Plot MSISensor scores by YCN
 ggplot(MSI_functional_YCN, aes(x = functional_YCN,
-             y = log2(MSISensor_score))) +
-  geom_jitter(aes(color=YCN),
-              width = .1,
+             y = log10(MSISensor_score))) +
+  geom_jitter(aes(color=functional_YCN),
+              width = .25,
               alpha = 0.6,
-              size = 0.4) +
-  geom_boxplot(aes(color = YCN,
-                   fill = YCN), width = 0.5, alpha = .5, outliers = F) +
-  geom_hline(yintercept = (log2(10)), color = "firebrick4", linetype = "dashed") +
-  theme_classic() +
-  scale_color_manual(values = c("steelblue4", "skyblue")) +
-  scale_fill_manual(values = c("steelblue4", "skyblue")) +
-  labs(x = "Functional YCN",
-       y = "log2(MSISensor Score)",
-       title = "MSISensor Score by Functional YCN (TCGA)")
+              size = 0.1) +
+  geom_boxplot(aes(color = functional_YCN,
+                   fill = functional_YCN), width = 0.5, alpha = .5, outliers = F) +
+  stat_compare_means(aes(group = functional_YCN),
+                     method = "t.test", 
+                     label = "p.signif",
+                     comparisons = NULL,
+                     size = 6,
+                     label.x = 1.5) +
+  theme_tufte(base_size = 24, base_family = "Arial") +
+  scale_color_manual(values = c("#FCAE1E", "#7852A9")) +
+  scale_fill_manual(values = c("#FCAE1E", "#7852A9")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +
+  labs(x = NULL,
+       y = "log10(MSISensor Score)",
+       title = NULL) -> MSI_plot
+
+ggarrange(MSI_plot, ncol = 2)
 ```
 
 

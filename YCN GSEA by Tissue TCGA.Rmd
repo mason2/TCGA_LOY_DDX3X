@@ -1,0 +1,211 @@
+---
+title: "YCN GSEA by Tissue TCGA"
+output: html_document
+date: "2026-02-25"
+---
+
+Setup, Load Packages, Load Data
+```{r}
+#Install Packages
+library(ggplot2)
+library(msigdbr)
+library(fgsea)
+library(DESeq2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(tibble)
+library(readr)
+library(ggrepel)
+library(dplyr)
+library(tidyr)
+library(pheatmap)
+library(forcats)
+
+#Set Working Directory
+setwd("/Users/mplynch/Desktop/DDX3X TCGA")
+
+#TCGA LOY calls
+LOY_calls <- read.csv("sample_LOY_calls_.7cutoff.csv")
+
+#TCGA raw read expression
+read_data_df <- as.data.frame(readRDS("TCGA_count_summary_cmb.RDS"))
+
+#Sequencing metadata (for tissue of origin)
+metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+```
+
+
+Conduct DESeq2 Analysis Between LOY and WTY Samples of Each Tissue
+```{r}
+#Loop through differential expression analysis for each tissue type
+deseq_results <- list()
+for (i in unique(metadata$acronym)){
+  #Subset counts data to necessary samples
+  deseq_counts <- read_data_df
+  
+  deseq_counts <- deseq_counts[, substr(colnames(read_data_df), 1, 12) %in%
+                                 metadata$bcr_patient_barcode[metadata$acronym == i]]
+  
+  deseq_counts <- deseq_counts[, substr(colnames(deseq_counts), 1, 16) %in%
+                                 LOY_calls$Sample_ID[complete.cases(LOY_calls$functional_YCN)]]
+  
+  #Define metadata (YCN and batch effects)
+  deseq_metadata <- data.frame("ID" = colnames(deseq_counts))
+  deseq_metadata$YCN <- ifelse(substr(deseq_metadata$ID, 1, 16) %in%
+                                 LOY_calls$Sample_ID[LOY_calls$functional_YCN == "LOY"], "LOY", "WTY")
+  deseq_metadata$batch <- substr(colnames(deseq_counts), 22, 25)
+  
+  #Run DESeq2 only if there are LOY and WTY samples present
+  if(length(unique(deseq_metadata$YCN)) == 2){
+    
+    #Create DESeq2 object and add batch effect if there is more than 1 batch, else skip
+    if (length(unique(deseq_metadata$batch)) > 1) {
+      dds <- DESeqDataSetFromMatrix(
+        countData = deseq_counts,
+        colData = deseq_metadata,
+        design = ~ YCN + batch)
+      } else {
+        dds <- DESeqDataSetFromMatrix(
+          countData = deseq_counts,
+          colData = deseq_metadata,
+          design = ~ YCN)
+      }
+    
+    #Run DESeq2
+    deseq_output <- DESeq(dds)
+    
+    #Save results to list
+    deseq_results[[i]] <- results(deseq_output, contrast = c("YCN", "LOY", "WTY"))
+  }
+}
+
+#Save/Load (so that you can run the loop while afk)
+# save(deseq_results, file = "TCGA_deseq_all_tissuetypes_YCN.RData")
+# load("TCGA_deseq_tissuetype_YCN.RData")
+```
+
+
+Run GSEA
+```{r}
+#Loop through pipeline for each tissue of interest
+GSEA_tissue_results <- list()
+for (i in names(deseq_results)){
+  #create named vector input for GSEA
+  ranked_GSEA_input <- deseq_results[[i]] %>%
+    as.data.frame() %>%
+    rownames_to_column("gene") %>%
+    arrange(desc(log2FoldChange)) %>%
+    drop_na() %>%
+    with(setNames(log2FoldChange, gene))
+  
+  #run GSEA
+  GSEA_output <- gseGO(geneList = ranked_GSEA_input,
+                                 OrgDb = org.Hs.eg.db,
+                                 ont = "BP",
+                                 minGSSize = 10,
+                                 maxGSSize = 2000,
+                                 pvalueCutoff = .05,
+                                 verbose = FALSE,
+                                 keyType = "SYMBOL")
+  
+  #Save results to df
+  GSEA_tissue_results[[i]] <- as.data.frame(GSEA_output)
+}
+
+#Save/Load (so that you can run the loop while afk)
+# save(GSEA_tissue_results, file = "TCGA_GSEA_all_tissuetypes_YCN.RData")
+# load("TCGA_GSEA_all_tissuetypes_YCN.RData")
+```
+
+
+Compare Commonly Enriched Pathways Across Tissue Types
+```{r}
+#Create object with pos/neg enriched pathways across all datasets
+LOY_enriched_pathways <- data.frame(GO_gene_set = unique(
+  unlist(
+    lapply(GSEA_tissue_results[1:24], function(x) {x$Description[x$NES > 0 & x$p.adjust < 0.05]}))))
+  
+WTY_enriched_pathways <- data.frame(GO_gene_set = unique(
+  unlist(
+    lapply(GSEA_tissue_results[1:24], function(x) {x$Description[x$NES < 0 & x$p.adjust < 0.05]}))))
+
+#Define column for whether each pathway is enriched by tissue type
+for (i in names(GSEA_tissue_results)){
+  LOY_enriched_pathways <- mutate(LOY_enriched_pathways,
+                                       !!i := GO_gene_set %in% GSEA_tissue_results[[i]]$Description[GSEA_tissue_results[[i]]$NES > 0 & GSEA_tissue_results[[i]]$p.adjust < .05])
+  WTY_enriched_pathways <- mutate(WTY_enriched_pathways,
+                                       !!i := GO_gene_set %in% GSEA_tissue_results[[i]]$Description[GSEA_tissue_results[[i]]$NES < 0 & GSEA_tissue_results[[i]]$p.adjust < .05])
+}
+
+#Generate upset plots
+upset(
+  LOY_enriched_pathways,
+  intersect = colnames(LOY_enriched_pathways)[-1],
+  min_size = 20,
+  themes = list(intersections_matrix = theme(
+      axis.title.x = element_text(size = 12),
+      axis.text.x = element_text(angle = 45, hjust = 1)),
+    overall_sizes = theme(
+      axis.title.y = element_text(size = 12),
+      axis.text.y = element_text(size = 10)))) +
+  ggtitle("Enriched in LOY vs. WTY") +
+  theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
+upset(
+  WTY_enriched_pathways,
+  intersect = colnames(LOY_enriched_pathways)[-1],
+  min_size = 20,
+  themes = list(intersections_matrix = theme(
+      axis.title.x = element_text(size = 12),
+      axis.text.x = element_text(angle = 45, hjust = 1)),
+    overall_sizes = theme(
+      axis.title.y = element_text(size = 12),
+      axis.text.y = element_text(size = 10)))) +
+  ggtitle("Enriched in WTY vs. LOY") +
+  theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
+
+#Order pathways by shared enrichment across tissues
+LOY_top_pathways <- data.frame("GO_gene_set" = LOY_enriched_pathways$GO_gene_set,
+                               "sum_tissues_enriched" = rowSums(LOY_enriched_pathways[, -1])) %>% arrange(desc(sum_tissues_enriched))
+WTY_top_pathways <- data.frame("GO_gene_set" = WTY_enriched_pathways$GO_gene_set,
+                               "sum_tissues_enriched" = rowSums(WTY_enriched_pathways[, -1])) %>% arrange(desc(sum_tissues_enriched))
+  
+#Build input and plot heatmap (first function defines placeholder row in dataframe, last function removes it)
+geneset_heatmap_input <- data.frame("GO_gene_set" = NA,
+                                    "tissue" = NA,
+                                    "NES" = NA,
+                                    "padj" = NA)
+for (i in names(GSEA_tissue_results)){
+  geneset_heatmap_input <- rbind(geneset_heatmap_input, 
+                                 data.frame("GO_gene_set" = GSEA_tissue_results[[i]]$Description[
+                                   GSEA_tissue_results[[i]]$Description %in% head(LOY_top_pathways, 20)$GO_gene_set |
+                                     GSEA_tissue_results[[i]]$Description %in% head(WTY_top_pathways, 20)$GO_gene_set],
+                                            "tissue" = i,
+                                            "NES" = GSEA_tissue_results[[i]]$NES[
+                                   GSEA_tissue_results[[i]]$Description %in% head(LOY_top_pathways, 20)$GO_gene_set |
+                                     GSEA_tissue_results[[i]]$Description %in% head(WTY_top_pathways, 20)$GO_gene_set],
+                                            "padj" = GSEA_tissue_results[[i]]$p.adjust[
+                                   GSEA_tissue_results[[i]]$Description %in% head(LOY_top_pathways, 20)$GO_gene_set |
+                                     GSEA_tissue_results[[i]]$Description %in% head(WTY_top_pathways, 20)$GO_gene_set]))
+}
+geneset_heatmap_input <- geneset_heatmap_input[-1, ]
+
+#plot heatmap
+geneset_heatmap_input %>%
+  group_by(GO_gene_set) %>%
+  mutate(avg_NES = mean(NES, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(GO_gene_set = fct_reorder(GO_gene_set, avg_NES)) %>%
+ggplot(aes(x = tissue, y = GO_gene_set, fill = NES)) +
+  geom_tile() +
+  theme_classic() +
+  labs(x = "Tissue", y = "Pathway Enrichment LOY vs. WTY", fill = "NES") +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+

@@ -38,7 +38,7 @@ LOY_calls <- read.csv("sample_LOY_calls_.7cutoff.csv")
 #TCGA raw read expression
 read_data_df <- as.data.frame(readRDS("TCGA_count_summary_cmb.RDS"))
 
-  
+
 #Sequencing Metadata
 metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
 ```
@@ -52,7 +52,6 @@ tissue_type_samples <- metadata[metadata$acronym == "STAD", ]
 
 #Subset expression data to only include samples in tissue type(s) of interest
 read_data_df <- read_data_df[, substr(colnames(read_data_df), 1, 12) %in% tissue_type_samples$bcr_patient_barcode]
-
 ```
 
 

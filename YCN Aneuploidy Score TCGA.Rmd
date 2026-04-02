@@ -1,0 +1,76 @@
+---
+title: "YCN Aneuploidy Score TCGA"
+author: "Mason Lynch"
+date: "2026-04-01"
+output: html_document
+---
+
+Setup
+```{r}
+#Load Packages
+library(readr)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(tidyr)
+library(stringr)
+library(ggpubr)
+library(ggthemes)
+
+#Load YCN calls
+TCGA_LOY <- read.csv("/Users/mplynch/Desktop/DDX3X TCGA/sample_LOY_calls_.7cutoff.csv")
+
+#Load aneuploigy score calls
+TCGA_aneuploidy <- read_xlsx("/Users/mplynch/Desktop/DDX3X TCGA/Aneuploidy_Score_Taylor_2018_CancerCell.xlsx")
+```
+
+
+Join YCN with Aneuploidy Data and Plot
+```{r}
+#Clean aneuploidy scores dataframe
+colnames(TCGA_aneuploidy) <- TCGA_aneuploidy[1, ]
+TCGA_aneuploidy <- TCGA_aneuploidy[-1, ]
+colnames(TCGA_aneuploidy)[3] <- "AneuploidyScore"
+TCGA_aneuploidy <- TCGA_aneuploidy %>%
+  mutate(AneuploidyScore = as.numeric(AneuploidyScore)) %>%
+  mutate(Genome_doublings = as.numeric(Genome_doublings))
+
+#Join relevant data and subset to samples with complete data
+YCN_aneuploidy <- TCGA_aneuploidy %>%
+  mutate(patientId = substr(Sample, 1, 12)) %>%
+  select(c("patientId", "AneuploidyScore", "Genome_doublings")) %>%
+  left_join(TCGA_LOY, by = "patientId") %>%
+  filter(complete.cases(functional_YCN))
+
+#Plot aneuploidy score by YCN
+ggplot(YCN_aneuploidy, aes(x = functional_YCN,
+             y = AneuploidyScore)) +
+  geom_jitter(aes(color=functional_YCN),
+              width = .25,
+              alpha = 0.6,
+              size = 0.1) +
+  geom_boxplot(aes(color = functional_YCN,
+                   fill = functional_YCN), width = 0.5, alpha = .5, outliers = F) +
+  stat_compare_means(aes(group = functional_YCN),
+                     method = "t.test", 
+                     label = "p.signif",
+                     comparisons = NULL,
+                     size = 6,
+                     label.x = 1.5) +
+  scale_color_manual(values = c("#FCAE1E", "#7852A9")) +
+  scale_fill_manual(values = c("#FCAE1E", "#7852A9")) +
+  theme_tufte(base_size = 24, base_family = "Arial") +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = NULL,
+       y = "Aneuploidy Score",
+       title = NULL) -> aneuploidy_plot
+
+ggarrange(aneuploidy_plot, ncol = 2)
+```
+
+
+
+
+
+

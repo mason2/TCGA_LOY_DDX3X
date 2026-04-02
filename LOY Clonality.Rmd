@@ -1,0 +1,68 @@
+---
+title: "LOY Clonality Analysis"
+output: html_document
+date: "2026-01-31"
+---
+
+Setup
+```{r}
+#Load Packages
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(readr)
+
+#Load in segment LOY calls
+LOY_calls <- read.csv("/Users/mplynch/Desktop/DDX3X TCGA/sample_LOY_calls_.7cutoff.csv")
+
+#Load in TCGA purity scores
+TCGA_purity <- read_tsv("/Users/mplynch/Desktop/DDX3X TCGA/TCGA_mastercalls.abs_tables_JSedit.fixed.txt")
+
+#Load in metadata
+TCGA_metadata <- read_tsv("/Users/mplynch/Desktop/DDX3X TCGA/clinical_PANCAN_patient_with_followup.tsv")
+```
+
+
+Display Purity and YCN Distributions, then Join Them
+```{r}
+#YCN distribution
+ggplot(LOY_calls, aes(x = sample_relative_CN)) +
+  geom_density(alpha = 0.5, fill = "lightgoldenrod1") +
+  labs(title = "Density of Y-Chromosome Copy Number TCGA", y = "Number Male Samples", x = "Y Chromosome Relative Copy Number") +
+  geom_vline(xintercept = 0, linetype = "dashed", size = .7, color = "steelblue4") +
+  geom_vline(xintercept = 0.7, linetype = "dashed", size = .7, color = "steelblue3") +
+  geom_vline(xintercept = .95, linetype = "dashed", size = .7, color = "steelblue2") +
+  geom_vline(xintercept = 1.3, linetype = "dashed", size = .7, color = "steelblue1") +
+  xlim(0, 3) +
+  theme_classic()
+
+#Purity distribution
+ggplot(TCGA_purity, aes(x = purity)) +
+  geom_density(alpha = 0.5, fill = "lightgoldenrod1") +
+  labs(title = "Density of Y-Chromosome Copy Number TCGA", y = "Number Male Samples", x = "Y Chromosome Relative Copy Number") +
+  geom_vline(xintercept = 0.7, linetype = "dashed", size = .7, color = "firebrick3") +
+  xlim(0, 3) +
+  theme_classic()
+
+#Create a purity YCN object
+LOY_purity <- mutate(TCGA_purity, Sample_ID = substr(sample, 1, 16)) %>%
+  select(Sample_ID, purity) %>%
+  left_join(LOY_calls, by = "Sample_ID")
+  
+#Drop samples without YCN call
+LOY_purity <- LOY_purity[complete.cases(LOY_purity$X), ]
+```
+
+
+Call Clonal vs. Subclonal LOY
+```{r}
+#Determine clonal LOY with assumption of fully WTY peripheral cells
+LOY_purity$clonal_LOY_0 <- ifelse(LOY_purity$YCN != "LOY", "not_LOY",
+                                   ifelse(LOY_purity$sample_relative_CN <= (1 - LOY_purity$purity), "clonal", "subclonal"))
+
+#Determine clonal LOY with assumption of 50% LOY peripheral cells
+
+#Determine clonal LOY with assumption of 100% LOY peripheral cells
+
+```
+

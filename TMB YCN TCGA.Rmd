@@ -22,13 +22,13 @@ setwd("/Users/mplynch/Desktop/DDX3X TCGA")
 Load in and Format Data
 ```{r}
 #Load in LOY Calls
-LOY_segment_data <- read.csv("sample_LOY_calls_.7cutoff.csv")
+LOY_segment_data <- read.csv("/Users/mplynch/Desktop/DDX3X TCGA/sample_LOY_calls_.7cutoff.csv")
 
 #Load in metadata
-metadata <- read_tsv("clinical_PANCAN_patient_with_followup.tsv")
+metadata <- read_tsv("/Users/mplynch/Desktop/DDX3X TCGA/clinical_PANCAN_patient_with_followup.tsv")
 
 #Load in TMB calls
-TMB <- read_tsv("mutation-load_updated.tsv")
+TMB <- read_tsv("/Users/mplynch/Desktop/DDX3X TCGA/mutation-load_updated.tsv")
 
 #join YCN and TMB
 TMB_YCN <- left_join(LOY_segment_data, TMB, by = c("patientId" = "Patient_ID"))
@@ -55,25 +55,29 @@ t.test(TMB_YCN$pooled_per_Mb ~ TMB_YCN$functional_YCN)
 
 #Plot Silent/Non-Silent TMB by YCN
 ggplot(TMB_YCN, aes(x = functional_YCN,
-             y = pooled_per_Mb)) +
+             y = log10(pooled_per_Mb))) +
   geom_jitter(aes(color=functional_YCN),
-              width = .1,
+              width = .25,
               alpha = 0.6,
-              size = 0.4) +
+              size = 0.1) +
   geom_boxplot(aes(color = functional_YCN,
                    fill = functional_YCN), width = 0.5, alpha = .5, outliers = F) +
-  theme_classic() +
   stat_compare_means(aes(group = functional_YCN),
                      method = "t.test", 
                      label = "p.signif",
                      comparisons = NULL,
                      size = 6,
                      label.x = 1.5) +
-  scale_color_manual(values = c("steelblue4", "skyblue")) +
-  scale_fill_manual(values = c("steelblue4", "skyblue")) +
-  labs(x = "Functional YCN",
-       y = "Mutations / Mb",
-       title = "Tumor Mutation Burden by Functional YCN (TCGA)")
+  theme_tufte(base_size = 24, base_family = "Arial") +
+  scale_color_manual(values = c("#FCAE1E", "#7852A9")) +
+  scale_fill_manual(values = c("#FCAE1E", "#7852A9")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +
+  labs(x = NULL,
+       y = "log10(Mutations per Mb)",
+       title = NULL) -> TMB_plot
+
+ggarrange(TMB_plot, ncol = 2)
 ```
 
 
