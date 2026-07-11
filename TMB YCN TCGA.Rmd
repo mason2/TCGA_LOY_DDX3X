@@ -13,6 +13,7 @@ library(dplyr)
 library(readxl)
 library(ggplot2)
 library(ggpubr)
+library(ggthemes)
 
 #Set Working Directory
 setwd("/Users/mplynch/Desktop/DDX3X TCGA")
@@ -53,9 +54,12 @@ TMB_YCN <- TMB_YCN[!TMB_YCN$pooled_per_Mb == 0, ]
 print("Pooled Mutation Burden t-test")
 t.test(TMB_YCN$pooled_per_Mb ~ TMB_YCN$functional_YCN)
 
+#Log transform TMB
+TMB_YCN$log10_TMB <- log10(TMB_YCN$pooled_per_Mb + 1)
+
 #Plot Silent/Non-Silent TMB by YCN
 ggplot(TMB_YCN, aes(x = functional_YCN,
-             y = log10(pooled_per_Mb))) +
+             y = log10_TMB)) +
   geom_jitter(aes(color=functional_YCN),
               width = .25,
               alpha = 0.6,
@@ -74,10 +78,45 @@ ggplot(TMB_YCN, aes(x = functional_YCN,
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         legend.position = "none") +
   labs(x = NULL,
-       y = "log10(Mutations per Mb)",
+       y = "log10(Mutations per Mb + 1)",
        title = NULL) -> TMB_plot
 
-ggarrange(TMB_plot, ncol = 2)
+#Arrange and save plot for figure
+TMB_plot <- ggarrange(TMB_plot, ncol = 2)
+#ggsave("/Users/mplynch/Desktop/LOY BioRxiv/TMB_YCN_plot.svg", plot = TMB_plot)
+
+#Create density plot of TMB by YCN
+ggplot(TMB_YCN, aes(x = log10_TMB,
+                           fill = functional_YCN,
+                           color = functional_YCN)) +
+  geom_vline(xintercept = mean(TMB_YCN[TMB_YCN$functional_YCN == "LOY", ]$log10_TMB),
+             linetype = "dashed",
+             linewidth = .8,
+             color = "#FCAE1E",
+             alpha = .5) +
+  geom_density(data = TMB_YCN[TMB_YCN$functional_YCN == "LOY", ],
+               aes(y = after_stat(scaled)),
+               alpha = 0.5,
+               outline.type = "upper") +
+  geom_vline(xintercept = mean(TMB_YCN[TMB_YCN$functional_YCN == "WTY", ]$log10_TMB),
+             linetype = "dashed",
+             linewidth = .8,
+             color = "#7852A9",
+             alpha = .5) +
+  geom_density(data = TMB_YCN[TMB_YCN$functional_YCN == "WTY", ],
+               aes(y = after_stat(scaled)),
+               alpha = 0.5,
+               outline.type = "upper") +
+  scale_color_manual(values = c("#FCAE1E", "#7852A9")) +
+  scale_fill_manual(values = c("#FCAE1E", "#7852A9")) +
+  theme_tufte(base_size = 24, base_family = "Arial") +
+  theme(legend.position = "none") +
+  labs(x = "log10(Mutations per Mb + 1)",
+       y = "Scaled Density",
+       title = NULL) -> TMB_density
+
+#Arrange and save boxplot for figure
+#ggsave("/Users/mplynch/Desktop/LOY BioRxiv/LOY Correlates Supplement/TMB_YCN_density.svg", plot = TMB_density)
 ```
 
 
@@ -109,7 +148,7 @@ ggplot(aes(x = acronym,
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-Export TMB YCn Data
+Export TMB YCN Data
 ```{r}
 #write.csv(file = "TMB_YCN_TCGA.csv", TMB_YCN[, c(2,5,6,11,12)])
 ```

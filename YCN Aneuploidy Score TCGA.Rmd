@@ -16,6 +16,7 @@ library(tidyr)
 library(stringr)
 library(ggpubr)
 library(ggthemes)
+library(ggridges)
 
 #Load YCN calls
 TCGA_LOY <- read.csv("/Users/mplynch/Desktop/DDX3X TCGA/sample_LOY_calls_.7cutoff.csv")
@@ -42,7 +43,12 @@ YCN_aneuploidy <- TCGA_aneuploidy %>%
   left_join(TCGA_LOY, by = "patientId") %>%
   filter(complete.cases(functional_YCN))
 
-#Plot aneuploidy score by YCN
+#Run t-test (for figure we will use actual p-value not stars)
+t.test(YCN_aneuploidy[YCN_aneuploidy$functional_YCN == "WTY", ]$AneuploidyScore,
+       YCN_aneuploidy[YCN_aneuploidy$functional_YCN == "LOY", ]$AneuploidyScore,
+       alternative = "two.sided")
+
+#Boxplot of aneuploidy score by YCN
 ggplot(YCN_aneuploidy, aes(x = functional_YCN,
              y = AneuploidyScore)) +
   geom_jitter(aes(color=functional_YCN),
@@ -64,9 +70,44 @@ ggplot(YCN_aneuploidy, aes(x = functional_YCN,
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   labs(x = NULL,
        y = "Aneuploidy Score",
-       title = NULL) -> aneuploidy_plot
+       title = NULL) -> aneuploidy_boxplot
 
-ggarrange(aneuploidy_plot, ncol = 2)
+#Adjust and save boxplot for figure
+aneuploidy_boxplot <- ggarrange(aneuploidy_boxplot, ncol = 2)
+#ggsave("/Users/mplynch/Desktop/LOY BioRxiv/aneuploidy_YCN_plot.svg", plot = aneuploidy_plot)
+
+#Density plot of aneuploidy score by YCN
+ggplot(YCN_aneuploidy, aes(x = AneuploidyScore,
+                           fill = functional_YCN,
+                           color = functional_YCN)) +
+  geom_vline(xintercept = mean(YCN_aneuploidy[YCN_aneuploidy$functional_YCN == "LOY", ]$AneuploidyScore),
+             linetype = "dashed",
+             linewidth = .8,
+             color = "#FCAE1E",
+             alpha = .5) +
+  geom_density(data = YCN_aneuploidy[YCN_aneuploidy$functional_YCN == "LOY", ],
+               aes(y = after_stat(scaled)),
+               alpha = 0.5,
+               outline.type = "upper") +
+  geom_vline(xintercept = mean(YCN_aneuploidy[YCN_aneuploidy$functional_YCN == "WTY", ]$AneuploidyScore),
+             linetype = "dashed",
+             linewidth = .8,
+             color = "#7852A9",
+             alpha = .5) +
+  geom_density(data = YCN_aneuploidy[YCN_aneuploidy$functional_YCN == "WTY", ],
+               aes(y = after_stat(scaled)),
+               alpha = 0.5,
+               outline.type = "upper") +
+  scale_color_manual(values = c("#FCAE1E", "#7852A9")) +
+  scale_fill_manual(values = c("#FCAE1E", "#7852A9")) +
+  theme_tufte(base_size = 24, base_family = "Arial") +
+  theme(legend.position = "none") +
+  labs(x = "Aneuploidy Score",
+       y = "Scaled Density",
+       title = NULL) -> aneuploidy_density
+
+#Adjust and save boxplot for figure
+#ggsave("/Users/mplynch/Desktop/LOY BioRxiv/LOY Correlates Supplement/aneuploidy_YCN_density.svg", plot = aneuploidy_density)
 ```
 
 

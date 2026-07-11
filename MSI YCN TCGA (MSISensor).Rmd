@@ -19,6 +19,7 @@ library(S4Vectors)
 library(tidyr)
 library(stringr)
 library(ggpubr)
+library(ggthemes)
 
 #Set Working Directory
 setwd("/Users/mplynch/Desktop/DDX3X TCGA")
@@ -74,10 +75,12 @@ chisq_result_cutoff <- suppressWarnings(chisq.test(chi_sq_matrix_cutoff, correct
 print("MSI Status Binary Chi-Squared Test")
 chisq_result_cutoff$p.value
 
+#Log transform MSISensor score
+MSI_functional_YCN$log10_MSISensor_score <- log10(MSI_functional_YCN$MSISensor_score + 1)
 
-#Plot MSISensor scores by YCN
+#Boxplot of MSISensor scores by YCN
 ggplot(MSI_functional_YCN, aes(x = functional_YCN,
-             y = log10(MSISensor_score))) +
+             y = log10_MSISensor_score)) +
   geom_jitter(aes(color=functional_YCN),
               width = .25,
               alpha = 0.6,
@@ -96,10 +99,45 @@ ggplot(MSI_functional_YCN, aes(x = functional_YCN,
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         legend.position = "none") +
   labs(x = NULL,
-       y = "log10(MSISensor Score)",
+       y = "log10(MSISensor Score + 1)",
        title = NULL) -> MSI_plot
 
-ggarrange(MSI_plot, ncol = 2)
+#Arrange and save boxplot for figure
+MSI_plot <- ggarrange(MSI_plot, ncol = 2)
+#ggsave("/Users/mplynch/Desktop/LOY BioRxiv/MSI_YCN_plot.svg", plot = MSI_plot)
+
+#Density plot of MSISensor Scores by YCN
+ggplot(MSI_functional_YCN, aes(x = log10_MSISensor_score,
+                           fill = functional_YCN,
+                           color = functional_YCN)) +
+  geom_vline(xintercept = mean(MSI_functional_YCN[MSI_functional_YCN$functional_YCN == "LOY", ]$log10_MSISensor_score),
+             linetype = "dashed",
+             linewidth = .8,
+             color = "#FCAE1E",
+             alpha = .5) +
+  geom_density(data = MSI_functional_YCN[MSI_functional_YCN$functional_YCN == "LOY", ],
+               aes(y = after_stat(scaled)),
+               alpha = 0.5,
+               outline.type = "upper") +
+  geom_vline(xintercept = mean(MSI_functional_YCN[MSI_functional_YCN$functional_YCN == "WTY", ]$log10_MSISensor_score),
+             linetype = "dashed",
+             linewidth = .8,
+             color = "#7852A9",
+             alpha = .5) +
+  geom_density(data = MSI_functional_YCN[MSI_functional_YCN$functional_YCN == "WTY", ],
+               aes(y = after_stat(scaled)),
+               alpha = 0.5,
+               outline.type = "upper") +
+  scale_color_manual(values = c("#FCAE1E", "#7852A9")) +
+  scale_fill_manual(values = c("#FCAE1E", "#7852A9")) +
+  theme_tufte(base_size = 24, base_family = "Arial") +
+  theme(legend.position = "none") +
+  labs(x = "log10(MSISensor score + 1)",
+       y = "Scaled Density",
+       title = NULL) -> MSI_density
+
+#Arrange and save boxplot for figure
+#ggsave("/Users/mplynch/Desktop/LOY BioRxiv/LOY Correlates Supplement/MSI_YCN_density.svg", plot = MSI_density)
 ```
 
 
